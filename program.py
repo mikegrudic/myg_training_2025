@@ -89,7 +89,7 @@ def make_program_csv():
         time_until_race_day = race_day - t
         if time_until_race_day.days > 7*(peak_weeks + taper_weeks):
             volume *= (1 + weekly_volume_percentage(volume,max_volume) / 100.0) ** (1.0 / 7)
-            if days_since_last_deload >= 7 * weeks_between_deloads and get_num_runs_from_volume(volume) >= 4:
+            if days_since_last_deload > 7 * weeks_between_deloads and get_num_runs_from_volume(volume) >= 4:
                 volume *= 1 - weekly_volume_percentage(volume,max_volume) / 100.0
                 days_since_last_deload = 0
             low_impact_minutes = (max_volume - volume) * 10
@@ -126,22 +126,18 @@ def make_program_csv():
     run_day = (program["Daily Miles"] > 0)
 #    lowimpact_day = # (program["Daily Low-Impact Minutes"] > 0)
     plotargs = {"marker":'.', "ls": '', "color":"black"}
-    ax[0].plot(program["Day"][1::7]/7 , program["Weekly Low-Impact Minutes"][1::7],**plotargs)
+    ax[0].plot((program["Day"][1::7]/7)+1 , program["Weekly Low-Impact Minutes"][1::7],**plotargs)
 #    ax[0].plot(program["Day"][lowimpact_day]/7 , program["Weekly Low-Impact Minutes"][lowimpact_day],**plotargs)
-    ax[1].plot(program["Day"][run_day]/7 , program["Daily Miles"][run_day],**plotargs)
-    ax[1].set_ylabel("Running Miles")
-    ax[0].set_ylabel("Low-Impact Minutes")
+    ax[1].plot((program["Day"][run_day]/7)+1 , program["Daily Miles"][run_day],**plotargs)
     ax[0].set_yticks([100,200,300,400])
-    ax[1].set_yticks(range(1,7))
-    plt.xticks(range(15))#,rotation=90)#,range(11
+    ax[1].set_yticks(range(1,8))
+    plt.xticks(range(1,17))#,rotation=90)#,range(11
 
     plt.subplots_adjust(hspace=0)
     plt.xlabel("Week")
+    ax[1].set_ylabel("Daily Running Miles")
+    ax[0].set_ylabel("Weekly Low-Impact Minutes")
     plt.savefig("Program.pdf",bbox_inches="tight")
-#    plt.ylabel("Daily Miles")
-#    plt.yticks(range(11))
-#    plt.yaxis.labels(which='both')
-    #plt.ylim(1,int(program["Miles Per Week"].max()+1))
     program.to_csv("program.csv")
 
 if __name__ == "__main__":

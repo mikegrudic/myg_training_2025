@@ -4,15 +4,17 @@ import numpy as np
 from matplotlib import pyplot as plt
 from astropy import units as u
 from datetime import datetime, timedelta
-from palettable.cmocean.sequential import Haline_6_r
+from palettable.cmocean.sequential import Haline_16_r
 
 cmap = plt.get_cmap("rainbow_r")
-cmap_weeks = 6
+CMAP_WEEKS = 16
 
-runs = glob("runs/*.fit")
+race_day = datetime(2025, 9, 6)
+
+runs = glob("runs_block2/*.fit")
 num_runs = len(runs)
 
-for dist in 5, 10:
+for dist in 5, 10, 21:
     fig, ax = plt.subplots()
     # ax.set_prop_cycle("color", Dark2_7.mpl_colors)
     t0 = datetime.today().date()
@@ -28,7 +30,7 @@ for dist in 5, 10:
         timestamps = values["timestamp"]
         if timestamps[-1].date() < t0:
             t0 = timestamps[-1].date()
-        dt = datetime.today().date() - timestamps[-1].date()
+        dt = race_day.date() - datetime.today().date()  # - timestamps[-1].date()
         dt_race = datetime(2025, 5, 3).date() - timestamps[-1].date()
         # print(dt.days)
         # if datetime.today().date() - timestamps[-1].date() > timedelta(days=31):
@@ -58,19 +60,20 @@ for dist in 5, 10:
             yerr=sigma_pace,
             xerr=sigma_hr,
             lw=0.8,
-            marker="s",
-            markersize=4,
-            color=cmap(dt.days / 7 / cmap_weeks),  # cmap(dt_race.days / 7 / cmap_weeks)
+            marker="o",
+            markersize=2,
+            color=cmap(dt.days / 7 / CMAP_WEEKS),  # cmap(dt_race.days / 7 / cmap_weeks)
             zorder=-dt.days,  # -dt_race.days,  #
-            alpha=(0.5 if dt.days > 42 else 1.0),
+            alpha=1,  # (0.5 if dt.days > 7 * CMAP_WEEKS else 1.0),
+            capsize=1,
         )
     #    ts.append(dt.days / 7)
 
-    s = ax.scatter(np.zeros_like(ts), np.zeros_like(ts), c=ts, vmin=0, vmax=cmap_weeks, cmap=cmap)
-    plt.colorbar(s, label="Lookback Time (Weeks)", pad=0)
+    s = ax.scatter(np.zeros_like(ts), np.zeros_like(ts), c=ts, vmin=0, vmax=CMAP_WEEKS, cmap=cmap)
+    plt.colorbar(s, label="Weeks til Race Day", pad=0)
     # plt.colorbar(s, label="Weeks Until Race Day", pad=0)
     ax.set_title(f"{dist}k Runs")
-    ax.set(xlim=[145, 170], ylim=[8, 11])
+    ax.set(xlim=[145, 170], ylim=[7, 12])
     plt.ylabel("Pace (min/mi)")
     plt.xlabel("Heart Rate (bpm)")
     # plt.xlim(120,180)

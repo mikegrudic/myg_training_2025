@@ -17,7 +17,10 @@ num_runs = len(runs)
 
 def grade_adjustment(grade_percent):
     grade, fac = np.loadtxt("strava_GAP_table.dat").T
-    return np.interp(grade_percent, grade, fac)
+    #    print(fac.min())
+    fac = np.interp(grade_percent, grade, fac)
+    fac[np.isnan(fac)] = 1.0
+    return fac
 
 
 for dist in 5, 10, 21:
@@ -30,14 +33,15 @@ for dist in 5, 10, 21:
 
         distances = values["distance"]
         altitude = values["enhanced_altitude"]
-        if distances.max() < 1e3 * dist * 0.97:
+        if distances.max() < 1e3 * dist * 0.97:  # account for garmin tax
             continue
+        print(dist)
         heartrates = values["heart_rate"]
         timestamps = values["timestamp"]
         if timestamps[-1].date() < t0:
             t0 = timestamps[-1].date()
-        dt = race_day.date() - datetime.today().date()  # - timestamps[-1].date()
-        dt_race = datetime(2025, 5, 3).date() - timestamps[-1].date()
+        # dt = race_day.date() - datetime.today().date()  # - timestamps[-1].date()
+        dt = race_day.date() - timestamps[-1].date()
 
         seconds_to_cut = 300
         if np.any(np.diff(distances) < 0):
@@ -65,13 +69,13 @@ for dist in 5, 10, 21:
         heartrates = heartrates[distances < 1e3 * dist]
         sigma_pace = np.diff(np.percentile(pace[seconds_to_cut:], [16, 50, 84]))[:, None]
         sigma_hr = np.diff(np.percentile(heartrates[seconds_to_cut:], [16, 50, 84]))[:, None]
-
+        print(cmap(dt.days / 7 / CMAP_WEEKS))
         ax.errorbar(
             np.median(heartrates[seconds_to_cut:]),
             np.median(pace[seconds_to_cut:]),
             yerr=sigma_pace,
             xerr=sigma_hr,
-            lw=0.8,
+            lw=0.5,
             marker="o",
             markersize=2,
             color=cmap(dt.days / 7 / CMAP_WEEKS),  # cmap(dt_race.days / 7 / cmap_weeks)
@@ -85,7 +89,7 @@ for dist in 5, 10, 21:
     plt.colorbar(s, label="Weeks til Race Day", pad=0)
     # plt.colorbar(s, label="Weeks Until Race Day", pad=0)
     ax.set_title(f"{dist}k Runs")
-    ax.set(xlim=[145, 170], ylim=[7, 12])
+    ax.set(xlim=[145, 170], ylim=[8, 11])
     plt.ylabel("Grade-adjusted pace (min/mi)")
     plt.xlabel("Heart Rate (bpm)")
     # plt.xlim(120,180)

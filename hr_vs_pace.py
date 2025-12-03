@@ -89,7 +89,7 @@ for dist in 5, 10, 21:
     plt.colorbar(s, label="Weeks til Race Day", pad=0)
     # plt.colorbar(s, label="Weeks Until Race Day", pad=0)
     ax.set_title(f"{dist}k Runs")
-    ax.set(xlim=[145, 170], ylim=[8, 11])
+    ax.set(xlim=[145, 180], ylim=[8, 11])
     plt.ylabel("Grade-adjusted pace (min/mi)")
     plt.xlabel("Heart Rate (bpm)")
     # plt.xlim(120,180)

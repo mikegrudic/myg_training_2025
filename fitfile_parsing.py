@@ -38,7 +38,9 @@ def fitfile_to_data(f, smoothing_seconds=0.0, seconds_tocut=0):
     for k, v in data_values.items():
         v = np.array(v)
         if smoothing_seconds:
-            if not (isinstance(v[0], str) or isinstance(v[0], datetime.datetime) or k == "distance"):
+            if not (
+                isinstance(v[0], str) or isinstance(v[0], datetime.datetime) or k == "distance" or v.dtype == object
+            ):
                 v = smooth(v, tau=smoothing_seconds)
         data_values[k] = v[seconds_tocut:]
     return data_values, data_units

@@ -2,6 +2,7 @@ from numba import jit
 import fitparse
 import numpy as np
 import datetime
+from functools import cache
 
 
 @jit(fastmath=True, error_model="numpy")
@@ -18,6 +19,7 @@ def smooth(x, tau=60.0):
     return result
 
 
+@cache
 def fitfile_to_data(f, smoothing_seconds=0.0, seconds_tocut=0):
     """Parses a fitparse file into two dicts containing the data fields and their units respectively"""
     fitfile = fitparse.FitFile(f)

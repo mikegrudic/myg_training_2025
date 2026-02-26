@@ -7,13 +7,13 @@ from palettable.cmocean.sequential import Haline_4_r
 from scipy.optimize import least_squares
 
 cmap = plt.get_cmap("rainbow_r")
-CMAP_WEEKS = 16
+CMAP_WEEKS = 20
 
 rides = glob("rides/*.fit")
 num_rides = len(rides)
 
 
-def make_hr_vs_power_plot(time_minutes: float):
+def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
     fig, ax = plt.subplots()
     t0 = datetime(2025, 11, 3).date()
     ts = []
@@ -21,7 +21,7 @@ def make_hr_vs_power_plot(time_minutes: float):
     mean_powers = []
     for i, f in enumerate(reversed(sorted(rides))):
         print(f)
-        values, _ = fitfile_to_data(f, smoothing_seconds=3.0, seconds_tocut=0)
+        values, _ = fitfile_to_data(f, smoothing_seconds=3.0, seconds_tocut=300)
 
         distances = values["distance"]
         altitude = values["enhanced_altitude"]
@@ -29,6 +29,7 @@ def make_hr_vs_power_plot(time_minutes: float):
         power = values["power"]
         timestamps = values["timestamp"]
         dt = timestamps[-1].date() - t0
+        ride_is_today = timestamps[-1].date() == datetime.today().date()
 
         # minutes_start = 10
         # minutes_end = 40
@@ -42,17 +43,23 @@ def make_hr_vs_power_plot(time_minutes: float):
         power_avg = (psum[dt_window:] - psum[:-dt_window]) / dt_window
         hrsum = heartrates.cumsum()
         hr_avg = (hrsum[dt_window:] - hrsum[:-dt_window]) / dt_window
-        power_mean = power_avg.max()
-        hr_mean = hr_avg[power_avg.argmax()]
+        efficiency_avg = power_avg / hr_avg
+        if most_efficient:
+            power_mean = power_avg[efficiency_avg.argmax()]
+            hr_mean = hr_avg[efficiency_avg.argmax()]
+        else:
+            power_mean = power_avg.max()
+            hr_mean = hr_avg[power_avg.argmax()]
 
         ax.scatter(
             [hr_mean],
             [power_mean],
             lw=0.5,
-            marker="s",
-            s=20,
+            marker=("*" if ride_is_today else "s"),
+            s=(60 if ride_is_today else 20),
+            edgecolor=("black" if ride_is_today else None),
             color=cmap(dt.days / 7 / CMAP_WEEKS),
-            zorder=-dt.days,
+            zorder=dt.days,
             alpha=1,
         )
         ts.append(dt.days / 7)
@@ -101,8 +108,8 @@ def make_hr_vs_power_plot(time_minutes: float):
 
 
 def main():
-    for m in 5, 20, 30, 60:
-        make_hr_vs_power_plot(m)
+    for m in 5, 10, 20, 30, 45, 60:
+        make_hr_vs_power_plot(m, most_efficient=True)
 
 
 if __name__ == "__main__":

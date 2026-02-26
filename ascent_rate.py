@@ -33,7 +33,7 @@ for i, f in enumerate(sorted(runs)):
         else:
             color = "blue"
         plt.scatter(
-            smooth(heartrates, tau / 2)[::60], climb_rate[::60], label=timestamps[0].date(), lw=1, color=color, s=0.4
+            smooth(heartrates, tau / 2)[::6], climb_rate[::6], label=timestamps[0].date(), lw=1, color=color, s=0.4
         )
         # plt.scatter(
         #     (climb_rate / (speed * u.m.to(u.imperial.ft) * 3600))[::60] * 100,

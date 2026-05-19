@@ -10,6 +10,7 @@ from scipy.optimize import least_squares
 cmap = plt.get_cmap("rainbow_r")
 CMAP_MONTHS = 8
 
+
 def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
     rides = glob("rides/*.fit")
     fig, ax = plt.subplots()

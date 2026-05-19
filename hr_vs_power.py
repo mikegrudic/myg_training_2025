@@ -1,4 +1,5 @@
 from fitfile_parsing import fitfile_to_data
+from garmin_sync import sync_rides
 from glob import glob
 import numpy as np
 from matplotlib import pyplot as plt
@@ -7,20 +8,17 @@ from palettable.cmocean.sequential import Haline_4_r
 from scipy.optimize import least_squares
 
 cmap = plt.get_cmap("rainbow_r")
-CMAP_WEEKS = 20
-
-rides = glob("rides/*.fit")
-num_rides = len(rides)
-
+CMAP_MONTHS = 8
 
 def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
+    rides = glob("rides/*.fit")
     fig, ax = plt.subplots()
     t0 = datetime(2025, 11, 3).date()
     ts = []
     mean_hrs = []
     mean_powers = []
     for i, f in enumerate(reversed(sorted(rides))):
-        print(f)
+        #        print(f)
         values, _ = fitfile_to_data(f, smoothing_seconds=3.0, seconds_tocut=300)
 
         distances = values["distance"]
@@ -29,8 +27,8 @@ def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
         power = values["power"]
         timestamps = values["timestamp"]
         dt = timestamps[-1].date() - t0
-        ride_is_today = timestamps[-1].date() == datetime.today().date()
-
+        ride_is_today = timestamps[-1].date() == datetime.today().date() and i == 0
+        #        print(f, ride_is_today, timestamps[-1].date())
         # minutes_start = 10
         # minutes_end = 40
         # avg_label = f"({minutes_start}-{minutes_end} min)"
@@ -58,17 +56,17 @@ def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
             marker=("*" if ride_is_today else "s"),
             s=(60 if ride_is_today else 20),
             edgecolor=("black" if ride_is_today else None),
-            color=cmap(dt.days / 7 / CMAP_WEEKS),
+            color=cmap(dt.days / 30 / CMAP_MONTHS),
             zorder=dt.days,
             alpha=1,
         )
-        ts.append(dt.days / 7)
+        ts.append(dt.days / 7 / 30)
         mean_hrs.append(hr_mean)
         mean_powers.append(power_mean)
 
-    s = ax.scatter(np.zeros_like(ts), np.zeros_like(ts), c=ts, vmin=0, vmax=CMAP_WEEKS, cmap=cmap)
+    s = ax.scatter(np.zeros_like(ts), np.zeros_like(ts), c=ts, vmin=0, vmax=CMAP_MONTHS, cmap=cmap)
     # plt.colorbar(s, label="Lookback Time (weeks)", pad=0)
-    plt.colorbar(s, label="Time (weeks)", pad=0, ticks=range(CMAP_WEEKS + 1))
+    plt.colorbar(s, label="Time (months)", pad=0, ticks=range(CMAP_MONTHS + 1))
     ax.set(xlim=[130, 170], ylim=[170, 320])
     plt.tick_params(axis="y", right=False)
     plt.ylabel(f"{time_minutes}min Power (W)")
@@ -97,7 +95,7 @@ def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
     #     plt.plot(
     #         hr_plot,
     #         model(fit, hr_plot, t),
-    #         color=cmap(t / CMAP_WEEKS),
+    #         color=cmap(t / CMAP_MONTHS),
     #         ls="dotted",
     #     )
 
@@ -108,6 +106,10 @@ def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
 
 
 def main():
+    try:
+        sync_rides()
+    except Exception as e:
+        print(f"Skipping Garmin sync: {e}")
     for m in 5, 10, 20, 30, 45, 60:
         make_hr_vs_power_plot(m, most_efficient=True)
 

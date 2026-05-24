@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <title>GPX Elevation Profile</title>
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 1000px; margin: 2em auto; padding: 0 1em; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 1400px; margin: 2em auto; padding: 0 1em; }
   h1 { margin-bottom: 0.2em; }
   .controls { display: flex; flex-direction: column; gap: 0.8em; margin: 1em 0; }
   .control-row { display: flex; align-items: center; gap: 0.8em; flex-wrap: wrap; }
@@ -14,8 +14,12 @@
   .metrics { display: flex; flex-wrap: wrap; gap: 1.5em; margin: 1em 0; padding: 0.6em 1em; background: #f4f4f4; border-radius: 6px; }
   .metrics span { font-size: 0.95em; }
   .metrics strong { display: block; font-size: 1.2em; color: #222; }
-  #plot img { max-width: 100%; height: auto; }
-  table.splits { border-collapse: collapse; margin: 1em 0; font-variant-numeric: tabular-nums; }
+  #plot img { max-width: 100%; height: auto; display: block; }
+  .results-row { display: flex; gap: 1.5em; align-items: flex-start; flex-wrap: wrap; }
+  .results-plot { flex: 1 1 700px; min-width: 0; }
+  .results-splits { flex: 0 1 auto; }
+  .results-splits h2 { margin-top: 0; }
+  table.splits { border-collapse: collapse; margin: 0 0 1em 0; font-variant-numeric: tabular-nums; }
   table.splits th, table.splits td { padding: 0.3em 0.9em; text-align: right; border-bottom: 1px solid #ddd; }
   table.splits th { background: #f4f4f4; }
   table.splits td:first-child, table.splits th:first-child { text-align: left; }
@@ -24,7 +28,7 @@
 </head>
 <body>
 
-<h1>GPX Elevation Profile</h1>
+<h1>Elevation Profile Pace Calculator</h1>
 <p>Upload a GPX track to see elevation, grade, and Strava grade-adjusted-pace factor vs. distance, assuming a constant-fatigue-rate model where the rate of work you are doing decays by a certain percentage each hour. 
 
 Note that the GAP model is calibrated to highly idealized conditions (not real trails) and is simply extrapolated to any absolute grades greater than 30%.
@@ -126,10 +130,36 @@ def _total_effort_mi(profile, distance_mi):
     avg_factor = 0.5 * (profile.gap_factor[:-1] + profile.gap_factor[1:])
     return float(np.sum(avg_factor * np.diff(distance_mi)))
 
-def initial_time_for_target_gap(target_pace_min_per_mi=10.0):
-    """Total elapsed time (minutes) that makes the average GAP equal to
-    the target pace, given the current smoothing setting. Returns None
-    if no GPX has been loaded."""
+# Men's world records, (distance_mi, pace_min_per_mi)
+WR_ANCHORS = (
+    (3.10686, 4.0517),   # 5K: Cheptegei 12:35
+    (26.2188, 4.5990),   # Marathon: Kiptum 2:00:35
+    (50.0, 5.7672),      # 50 mi: Lawrence 4:48:21
+    (62.137, 5.8840),    # 100 km: Sorokin 6:05:35
+    (100.0, 6.5100),     # 100 mi: Sorokin ~10:51
+)
+
+def _world_record_pace_min_per_mi(distance_mi):
+    """Rough men's world-record pace (min/mi) at the given distance,
+    via piecewise-linear interpolation in log-log space through the
+    5K / marathon / 100-mi anchors. Extrapolates linearly in log-log
+    outside that range."""
+    log_ds = np.log10([a[0] for a in WR_ANCHORS])
+    log_ps = np.log10([a[1] for a in WR_ANCHORS])
+    log_d = np.log10(distance_mi)
+    if log_d < log_ds[0]:
+        slope = (log_ps[1] - log_ps[0]) / (log_ds[1] - log_ds[0])
+        log_p = log_ps[0] + slope * (log_d - log_ds[0])
+    elif log_d > log_ds[-1]:
+        slope = (log_ps[-1] - log_ps[-2]) / (log_ds[-1] - log_ds[-2])
+        log_p = log_ps[-1] + slope * (log_d - log_ds[-1])
+    else:
+        log_p = float(np.interp(log_d, log_ds, log_ps))
+    return float(10 ** log_p)
+
+def default_initial_time_minutes():
+    """Default total time: half-world-record pace applied to the
+    GAP-adjusted distance. Returns None if no GPX is loaded."""
     if _state["bytes"] is None:
         return None
     profile = ElevationProfile.from_gpx(
@@ -137,7 +167,9 @@ def initial_time_for_target_gap(target_pace_min_per_mi=10.0):
         smoothing_length=_state["smoothing"],
     )
     distance_mi = profile.distance * M_TO_MI
-    return target_pace_min_per_mi * _total_effort_mi(profile, distance_mi)
+    effort = _total_effort_mi(profile, distance_mi)
+    wr_pace = _world_record_pace_min_per_mi(effort)
+    return 2.0 * wr_pace * effort
 
 def total_effort_mi_current():
     """Effort-weighted distance (mi) of the loaded GPX at the current
@@ -174,7 +206,9 @@ def render():
     ax_gap = axes[1, 0]
     ax_pace = axes[1, 1]
     ax_split = axes[2, 0]
-    axes[2, 1].set_visible(False)
+    ax_vspeed = axes[2, 1]
+
+    vspeed_ft_per_h = np.gradient(elevation_ft, split_hours)
 
     ax_elev.plot(distance_mi, elevation_ft, lw=1, color="black")
     ax_elev.set_ylabel("Elevation (ft)")
@@ -203,8 +237,13 @@ def render():
     ax_split.plot(distance_mi, split_hours, lw=1, color="black")
     ax_split.set_ylabel("Elapsed time (h)")
 
-    for ax in (ax_elev, ax_grade, ax_gap, ax_pace, ax_split):
+    ax_vspeed.plot(distance_mi, vspeed_ft_per_h, lw=0.7, color="black")
+    ax_vspeed.axhline(0, color="k", lw=0.3)
+    ax_vspeed.set_ylabel("Vertical speed (ft/h)")
+
+    for ax in (ax_elev, ax_grade, ax_gap, ax_pace, ax_split, ax_vspeed):
         ax.xaxis.set_major_locator(MultipleLocator(1.0))
+        ax.set_xlim(0, distance_mi[-1])
         ax.set_xlabel("Distance (mi)")
         ax.tick_params(labelbottom=True)
         ax.grid(alpha=0.3)
@@ -223,7 +262,8 @@ def render():
         pace_min += 1
         pace_sec = 0
 
-    gap_pace_min_per_mi = _state["total_time_minutes"] / _total_effort_mi(profile, distance_mi)
+    total_effort_mi = _total_effort_mi(profile, distance_mi)
+    gap_pace_min_per_mi = _state["total_time_minutes"] / total_effort_mi
     gap_min = int(gap_pace_min_per_mi)
     gap_sec = int(round((gap_pace_min_per_mi - gap_min) * 60))
     if gap_sec == 60:
@@ -233,6 +273,7 @@ def render():
     metrics_html = (
         "<div class='metrics'>"
         f"<span><strong>{distance_mi[-1]:.2f} mi</strong>Distance</span>"
+        f"<span><strong>{total_effort_mi:.2f} mi</strong>GAP-adjusted distance</span>"
         f"<span><strong>{gain_ft:,.0f} ft</strong>Total gain</span>"
         f"<span><strong>{profile.grade.min():+.1f} / {profile.grade.max():+.1f} %</strong>Grade range</span>"
         f"<span><strong>{float(np.median(profile.gap_factor)):.2f}&times;</strong>Median GAP factor</span>"
@@ -252,8 +293,16 @@ def render():
     split_durations = times_at_marks - prev_times
     segment_lengths_mi = mile_marks - prev_marks
 
+    segment_gain_ft = []
+    for prev_m, mile in zip(prev_marks, mile_marks):
+        interior_mask = (distance_mi > prev_m) & (distance_mi < mile)
+        elev_start = float(np.interp(prev_m, distance_mi, elevation_ft))
+        elev_end = float(np.interp(mile, distance_mi, elevation_ft))
+        seg_elev = np.concatenate(([elev_start], elevation_ft[interior_mask], [elev_end]))
+        segment_gain_ft.append(float(np.sum(np.maximum(0.0, np.diff(seg_elev)))))
+
     rows = []
-    for mile, dur_min, cum_min, seg_mi in zip(mile_marks, split_durations, times_at_marks, segment_lengths_mi):
+    for mile, dur_min, cum_min, seg_mi, gain in zip(mile_marks, split_durations, times_at_marks, segment_lengths_mi, segment_gain_ft):
         if abs(mile - round(mile)) < 1e-6:
             label = f"{int(round(mile))}"
         else:
@@ -262,19 +311,28 @@ def render():
         rows.append(
             "<tr>"
             f"<td>{label}</td>"
+            f"<td>{gain:,.0f}</td>"
             f"<td>{_format_clock(dur_min * 60)}</td>"
-            f"<td>{pace_str}/mi</td>"
+            f"<td>{pace_str}</td>"
             f"<td>{_format_clock(cum_min * 60)}</td>"
             "</tr>"
         )
     table_html = (
+        "<div class='results-splits'>"
         "<h2>Mile splits</h2>"
         "<table class='splits'>"
-        "<thead><tr><th>Mile</th><th>Split</th><th>Pace</th><th>Cumulative</th></tr></thead>"
+        "<thead><tr><th>Mile</th><th>Gain (ft)</th><th>Split</th><th>Pace (min/mi)</th><th>Cumulative</th></tr></thead>"
         "<tbody>" + "".join(rows) + "</tbody></table>"
+        "</div>"
     )
 
-    return metrics_html + f"<img src='{img_src}'>" + table_html
+    return (
+        metrics_html
+        + "<div class='results-row'>"
+        + f"<div class='results-plot'><img src='{img_src}'></div>"
+        + table_html
+        + "</div>"
+    )
   `);
 
   bindEvents();
@@ -331,10 +389,13 @@ function bindEvents() {
     if (!file) return;
     const buf = await file.arrayBuffer();
     pyodide.globals.get("set_bytes")(new Uint8Array(buf));
-    const defaultMin = pyodide.globals.get("initial_time_for_target_gap")(10.0);
+    const defaultMin = pyodide.globals.get("default_initial_time_minutes")();
     if (defaultMin !== null) {
       document.getElementById("time").value = formatHMS(defaultMin);
-      document.getElementById("gap").value = "10:00";
+      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+      if (totalEffort !== null && totalEffort > 0) {
+        document.getElementById("gap").value = formatMS(defaultMin / totalEffort);
+      }
       pyodide.globals.get("set_total_time")(defaultMin);
     }
     scheduleRender();

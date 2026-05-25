@@ -23,15 +23,16 @@
   table.splits th, table.splits td { padding: 0.3em 0.9em; text-align: right; border-bottom: 1px solid #ddd; }
   table.splits th { background: #f4f4f4; }
   table.splits td:first-child, table.splits th:first-child { text-align: left; }
+  table.splits tr.waypoint { background: #fff7d6; font-style: italic; }
 </style>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
 </head>
 <body>
 
 <h1>Elevation Profile Pace Calculator</h1>
-<p>Upload a GPX track to see elevation, grade, and Strava grade-adjusted-pace factor vs. distance, assuming a constant-fatigue-rate model where the rate of work you are doing decays by a certain percentage each hour. 
+<p>Upload a GPX track to see elevation, grade, and grade-adjustment factor vs. distance, assuming a constant-fatigue-rate model where the rate of work you are doing decays by a certain percentage each hour. This can help you figure out the splits for an even effort in a hike or run.
 
-Note that the GAP model is calibrated to highly idealized conditions (not real trails) and is simply extrapolated to any absolute grades greater than 30%.
+Note that the grade-adjustment model (the same as used by Strava) is calibrated to highly idealized conditions (not real trails) and is simply extrapolated to any absolute grades greater than 30%.
 </p>
 
 <div class="controls">
@@ -52,13 +53,34 @@ Note that the GAP model is calibrated to highly idealized conditions (not real t
     <input type="text" id="gap" value="10:00" pattern="\d+:\d{2}" size="7" disabled>
   </div>
   <div class="control-row">
+    <label for="pace">Target average pace (mm:ss/mi):</label>
+    <input type="text" id="pace" value="10:00" pattern="\d+:\d{2}" size="7" disabled>
+  </div>
+  <div class="control-row">
     <label for="fatigue">Fatigue (% GAP decay per hour):</label>
     <input type="number" id="fatigue" value="0" min="0" max="50" step="0.5" size="5" disabled>
   </div>
   <div class="control-row">
+    <label for="units">Units:</label>
+    <select id="units" disabled>
+      <option value="imperial" selected>Imperial (mi, ft)</option>
+      <option value="metric">Metric (km, m)</option>
+    </select>
+  </div>
+  <div class="control-row">
+    <label for="splits-mode">Splits:</label>
+    <select id="splits-mode" disabled>
+      <option value="distance" selected>Distance only</option>
+      <option value="distance-waypoints">Distance + waypoints</option>
+      <option value="waypoints">Waypoints only</option>
+    </select>
+  </div>
+  <!--
+  <div class="control-row">
     <label for="show-derived-gap">Show pace ÷ gap_factor (sanity check):</label>
     <input type="checkbox" id="show-derived-gap" disabled>
   </div>
+  -->
 </div>
 
 <div id="status">Loading Python runtime (this takes a few seconds on first load)…</div>
@@ -68,6 +90,8 @@ Note that the GAP model is calibrated to highly idealized conditions (not real t
 let pyodide = null;
 let renderInFlight = false;
 let pendingRender = false;
+let unitsMode = "imperial";
+const KM_PER_MI = 1.609344;
 
 async function init() {
   pyodide = await loadPyodide();
@@ -89,7 +113,7 @@ matplotlib.use("Agg")
 import numpy as np
 from matplotlib import pyplot as plt
 from matplotlib.ticker import FuncFormatter, MultipleLocator, FixedLocator, NullLocator
-from elevation_profile import ElevationProfile
+from elevation_profile import ElevationProfile, parse_waypoints, _haversine
 
 
 def _format_clock(total_seconds):
@@ -106,10 +130,12 @@ def _pace_tick(min_per_mi, _pos):
         return ""
     return _format_clock(min_per_mi * 60)
 
-_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False}
+_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance"}
 
 M_TO_MI = 0.0006213711922
 M_TO_FT = 3.280839895
+KM_PER_MI = 1.609344
+M_PER_FT = 0.3048
 
 def set_bytes(b):
     _state["bytes"] = bytes(b)
@@ -120,11 +146,19 @@ def set_smoothing(s):
 def set_total_time(minutes):
     _state["total_time_minutes"] = float(minutes)
 
-def set_show_derived_gap(flag):
-    _state["show_derived_gap"] = bool(flag)
+# def set_show_derived_gap(flag):
+#     _state["show_derived_gap"] = bool(flag)
 
 def set_fatigue(rate_per_hour):
     _state["fatigue_rate_per_hour"] = float(rate_per_hour)
+
+def set_units(units):
+    if units in ("imperial", "metric"):
+        _state["units"] = units
+
+def set_splits_mode(mode):
+    if mode in ("distance", "distance-waypoints", "waypoints"):
+        _state["splits_mode"] = mode
 
 def _total_effort_mi(profile, distance_mi):
     avg_factor = 0.5 * (profile.gap_factor[:-1] + profile.gap_factor[1:])
@@ -183,6 +217,16 @@ def total_effort_mi_current():
     distance_mi = profile.distance * M_TO_MI
     return _total_effort_mi(profile, distance_mi)
 
+def total_distance_mi_current():
+    """Actual route length (mi). Returns None if no GPX is loaded."""
+    if _state["bytes"] is None:
+        return None
+    profile = ElevationProfile.from_gpx(
+        io.BytesIO(_state["bytes"]),
+        smoothing_length=_state["smoothing"],
+    )
+    return float(profile.distance[-1] * M_TO_MI)
+
 def render():
     if _state["bytes"] is None:
         return ""
@@ -190,15 +234,32 @@ def render():
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
     )
-    distance_mi = profile.distance * M_TO_MI
-    elevation_ft = profile.elevation * M_TO_FT
-    gain_ft = float(np.sum(np.maximum(0.0, np.diff(elevation_ft))))
+
+    metric = _state["units"] == "metric"
+    if metric:
+        dist_unit = "km"
+        vert_unit = "m"
+        speed_unit = "kph"
+        distance = profile.distance / 1000.0
+        elevation = profile.elevation
+        pace_ticks = [2.5, 3, 3.5, 4, 5, 6, 8, 10, 15, 20, 30, 45, 60, 90, 120]
+    else:
+        dist_unit = "mi"
+        vert_unit = "ft"
+        speed_unit = "mph"
+        distance = profile.distance * M_TO_MI
+        elevation = profile.elevation * M_TO_FT
+        pace_ticks = [4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 30, 45, 60, 90, 120, 180]
+
+    distance_mi = profile.distance * M_TO_MI  # for effort computation only
+    gain_disp = float(np.sum(np.maximum(0.0, np.diff(elevation))))
     split_minutes = profile.constant_gap_split_time(
         _state["total_time_minutes"],
         fatigue_rate_per_hour=_state["fatigue_rate_per_hour"],
     )
     split_hours = split_minutes / 60.0
-    pace_min_per_mi_series = np.gradient(split_minutes, distance_mi)
+    pace_min_per_unit_series = np.gradient(split_minutes, distance)
+    vspeed_per_h = np.gradient(elevation, split_hours)
 
     fig, axes = plt.subplots(3, 2, figsize=(14, 10), sharex="all")
     ax_elev = axes[0, 0]
@@ -208,43 +269,40 @@ def render():
     ax_split = axes[2, 0]
     ax_vspeed = axes[2, 1]
 
-    vspeed_ft_per_h = np.gradient(elevation_ft, split_hours)
+    ax_elev.plot(distance, elevation, lw=1, color="black")
+    ax_elev.set_ylabel(f"Elevation ({vert_unit})")
 
-    ax_elev.plot(distance_mi, elevation_ft, lw=1, color="black")
-    ax_elev.set_ylabel("Elevation (ft)")
-
-    ax_grade.plot(distance_mi, profile.grade, lw=0.7, color="black")
+    ax_grade.plot(distance, profile.grade, lw=0.7, color="black")
     ax_grade.axhline(0, color="k", lw=0.3)
     ax_grade.set_ylabel("Grade (%)")
 
-    ax_gap.plot(distance_mi, profile.gap_factor, lw=0.7, color="black")
+    ax_gap.plot(distance, profile.gap_factor, lw=0.7, color="black")
     ax_gap.axhline(1, color="k", lw=0.3)
-    ax_gap.set_ylabel("Relative effort per mile")
+    ax_gap.set_ylabel(f"Relative effort per {dist_unit}")
 
-    ax_pace.plot(distance_mi, pace_min_per_mi_series, lw=0.8, color="black", label="actual")
-    if _state["show_derived_gap"]:
-        derived_gap_series = pace_min_per_mi_series / profile.gap_factor
-        ax_pace.plot(distance_mi, derived_gap_series, lw=0.8, color="black", ls="--", label="pace ÷ gap_factor")
-        ax_pace.legend(loc="best", fontsize=8)
+    ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color="black", label="actual")
+    # if _state["show_derived_gap"]:
+    #     derived_gap_series = pace_min_per_unit_series / profile.gap_factor
+    #     ax_pace.plot(distance, derived_gap_series, lw=0.8, color="black", ls="--", label="pace ÷ gap_factor")
+    #     ax_pace.legend(loc="best", fontsize=8)
     ax_pace.set_yscale("log")
     ax_pace.invert_yaxis()
-    ax_pace.set_ylabel("Pace (min:sec/mi)")
-    pace_ticks = [4, 5, 6, 7, 8, 9, 10, 12, 15, 20, 30, 45, 60, 90, 120, 180]
+    ax_pace.set_ylabel(f"Pace (min:sec/{dist_unit})")
     ax_pace.yaxis.set_major_locator(FixedLocator(pace_ticks))
     ax_pace.yaxis.set_minor_locator(NullLocator())
     ax_pace.yaxis.set_major_formatter(FuncFormatter(_pace_tick))
 
-    ax_split.plot(distance_mi, split_hours, lw=1, color="black")
+    ax_split.plot(distance, split_hours, lw=1, color="black")
     ax_split.set_ylabel("Elapsed time (h)")
 
-    ax_vspeed.plot(distance_mi, vspeed_ft_per_h, lw=0.7, color="black")
+    ax_vspeed.plot(distance, vspeed_per_h, lw=0.7, color="black")
     ax_vspeed.axhline(0, color="k", lw=0.3)
-    ax_vspeed.set_ylabel("Vertical speed (ft/h)")
+    ax_vspeed.set_ylabel(f"Vertical speed ({vert_unit}/h)")
 
     for ax in (ax_elev, ax_grade, ax_gap, ax_pace, ax_split, ax_vspeed):
         ax.xaxis.set_major_locator(MultipleLocator(1.0))
-        ax.set_xlim(0, distance_mi[-1])
-        ax.set_xlabel("Distance (mi)")
+        ax.set_xlim(0, distance[-1])
+        ax.set_xlabel(f"Distance ({dist_unit})")
         ax.tick_params(labelbottom=True)
         ax.grid(alpha=0.3)
 
@@ -255,61 +313,87 @@ def render():
     plt.close(fig)
     img_src = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
 
-    pace_min_per_mi = _state["total_time_minutes"] / distance_mi[-1]
-    pace_min = int(pace_min_per_mi)
-    pace_sec = int(round((pace_min_per_mi - pace_min) * 60))
+    pace_min_per_unit = _state["total_time_minutes"] / distance[-1]
+    pace_min = int(pace_min_per_unit)
+    pace_sec = int(round((pace_min_per_unit - pace_min) * 60))
     if pace_sec == 60:
         pace_min += 1
         pace_sec = 0
 
     total_effort_mi = _total_effort_mi(profile, distance_mi)
-    gap_pace_min_per_mi = _state["total_time_minutes"] / total_effort_mi
-    gap_min = int(gap_pace_min_per_mi)
-    gap_sec = int(round((gap_pace_min_per_mi - gap_min) * 60))
+    total_effort_disp = total_effort_mi * (KM_PER_MI if metric else 1.0)
+    gap_pace_min_per_unit = _state["total_time_minutes"] / total_effort_disp
+    gap_min = int(gap_pace_min_per_unit)
+    gap_sec = int(round((gap_pace_min_per_unit - gap_min) * 60))
     if gap_sec == 60:
         gap_min += 1
         gap_sec = 0
 
+    avg_speed = distance[-1] / (_state["total_time_minutes"] / 60.0)
+
     metrics_html = (
         "<div class='metrics'>"
-        f"<span><strong>{distance_mi[-1]:.2f} mi</strong>Distance</span>"
-        f"<span><strong>{total_effort_mi:.2f} mi</strong>GAP-adjusted distance</span>"
-        f"<span><strong>{gain_ft:,.0f} ft</strong>Total gain</span>"
+        f"<span><strong>{distance[-1]:.2f} {dist_unit}</strong>Distance</span>"
+        f"<span><strong>{total_effort_disp:.2f} {dist_unit}</strong>GAP-adjusted distance</span>"
+        f"<span><strong>{gain_disp:,.0f} {vert_unit}</strong>Total gain</span>"
         f"<span><strong>{profile.grade.min():+.1f} / {profile.grade.max():+.1f} %</strong>Grade range</span>"
         f"<span><strong>{float(np.median(profile.gap_factor)):.2f}&times;</strong>Median GAP factor</span>"
-        f"<span><strong>{pace_min}:{pace_sec:02d} /mi</strong>Average pace</span>"
-        f"<span><strong>{gap_min}:{gap_sec:02d} /mi</strong>Average GAP</span>"
+        f"<span><strong>{pace_min}:{pace_sec:02d} /{dist_unit}</strong>Average pace</span>"
+        f"<span><strong>{avg_speed:.2f} {speed_unit}</strong>Average speed</span>"
+        f"<span><strong>{gap_min}:{gap_sec:02d} /{dist_unit}</strong>Average GAP</span>"
         "</div>"
     )
 
-    finish_mi = distance_mi[-1]
-    mile_marks = list(np.arange(1.0, np.floor(finish_mi) + 1.0))
-    if not mile_marks or finish_mi - mile_marks[-1] > 1e-3:
-        mile_marks.append(finish_mi)
-    mile_marks = np.array(mile_marks)
-    times_at_marks = np.interp(mile_marks, distance_mi, split_minutes)
-    prev_times = np.concatenate(([0.0], times_at_marks[:-1]))
-    prev_marks = np.concatenate(([0.0], mile_marks[:-1]))
-    split_durations = times_at_marks - prev_times
-    segment_lengths_mi = mile_marks - prev_marks
+    finish_unit = distance[-1]
+    splits_mode = _state["splits_mode"]
 
-    segment_gain_ft = []
-    for prev_m, mile in zip(prev_marks, mile_marks):
-        interior_mask = (distance_mi > prev_m) & (distance_mi < mile)
-        elev_start = float(np.interp(prev_m, distance_mi, elevation_ft))
-        elev_end = float(np.interp(mile, distance_mi, elevation_ft))
-        seg_elev = np.concatenate(([elev_start], elevation_ft[interior_mask], [elev_end]))
-        segment_gain_ft.append(float(np.sum(np.maximum(0.0, np.diff(seg_elev)))))
+    # Collect waypoint marks (used by both -waypoints modes)
+    waypoint_marks = []  # list of (distance_in_units, label_with_mileage)
+    if splits_mode in ("distance-waypoints", "waypoints"):
+        for wp_lat, wp_lon, name in parse_waypoints(io.BytesIO(_state["bytes"])):
+            d_to_route = _haversine(wp_lat, wp_lon, profile.latitude, profile.longitude)
+            idx = int(np.argmin(d_to_route))
+            if d_to_route[idx] < 500.0:
+                wp_dist = float(distance[idx])
+                label = f"{name} ({wp_dist:.2f} {dist_unit})"
+                waypoint_marks.append((wp_dist, label))
+        waypoint_marks.sort(key=lambda x: x[0])
 
-    rows = []
-    for mile, dur_min, cum_min, seg_mi, gain in zip(mile_marks, split_durations, times_at_marks, segment_lengths_mi, segment_gain_ft):
-        if abs(mile - round(mile)) < 1e-6:
-            label = f"{int(round(mile))}"
-        else:
-            label = f"{mile:.2f}"
-        pace_str = _format_clock((dur_min / seg_mi) * 60) if seg_mi > 0 else "—"
-        rows.append(
-            "<tr>"
+    # Marks that act as splits (full row with gain/split/pace).
+    split_marks = []  # list of (distance, label, is_waypoint_styled)
+    if splits_mode in ("distance", "distance-waypoints"):
+        for m in range(1, int(np.floor(finish_unit)) + 1):
+            split_marks.append((float(m), str(m), False))
+        if not split_marks or finish_unit - split_marks[-1][0] > 1e-3:
+            split_marks.append((float(finish_unit), f"{finish_unit:.2f}", False))
+    else:  # waypoints-only
+        for d, name in waypoint_marks:
+            split_marks.append((d, name, True))
+        # Add an implicit Finish row so the last segment is accounted for.
+        if not split_marks or finish_unit - split_marks[-1][0] > 1e-3:
+            split_marks.append((float(finish_unit), "Finish", False))
+
+    # Info-only marks (just cumulative time, used only in distance+waypoints mode).
+    info_marks = []  # list of (distance, label)
+    if splits_mode == "distance-waypoints":
+        info_marks = list(waypoint_marks)
+
+    table_entries = []
+    prev_split_dist = 0.0
+    for mark_d, label, is_wp_styled in split_marks:
+        cum_min = float(np.interp(mark_d, distance, split_minutes))
+        seg_len = mark_d - prev_split_dist
+        prev_cum = float(np.interp(prev_split_dist, distance, split_minutes)) if prev_split_dist > 0 else 0.0
+        dur_min = cum_min - prev_cum
+        interior_mask = (distance > prev_split_dist) & (distance < mark_d)
+        elev_start = float(np.interp(prev_split_dist, distance, elevation))
+        elev_end = float(np.interp(mark_d, distance, elevation))
+        seg_elev = np.concatenate(([elev_start], elevation[interior_mask], [elev_end]))
+        gain = float(np.sum(np.maximum(0.0, np.diff(seg_elev))))
+        pace_str = _format_clock((dur_min / seg_len) * 60) if seg_len > 0 else "—"
+        cls = " class='waypoint'" if is_wp_styled else ""
+        row = (
+            f"<tr{cls}>"
             f"<td>{label}</td>"
             f"<td>{gain:,.0f}</td>"
             f"<td>{_format_clock(dur_min * 60)}</td>"
@@ -317,11 +401,29 @@ def render():
             f"<td>{_format_clock(cum_min * 60)}</td>"
             "</tr>"
         )
+        table_entries.append((mark_d, row))
+        prev_split_dist = mark_d
+
+    for wp_dist, name in info_marks:
+        cum_min = float(np.interp(wp_dist, distance, split_minutes))
+        row = (
+            "<tr class='waypoint'>"
+            f"<td>{name}</td>"
+            "<td>—</td><td>—</td><td>—</td>"
+            f"<td>{_format_clock(cum_min * 60)}</td>"
+            "</tr>"
+        )
+        table_entries.append((wp_dist, row))
+
+    table_entries.sort(key=lambda x: x[0])
+    rows = [entry[1] for entry in table_entries]
+    splits_heading = "Kilometer splits" if metric else "Mile splits"
+    mark_header = "Km" if metric else "Mile"
     table_html = (
         "<div class='results-splits'>"
-        "<h2>Mile splits</h2>"
+        f"<h2>{splits_heading}</h2>"
         "<table class='splits'>"
-        "<thead><tr><th>Mile</th><th>Gain (ft)</th><th>Split</th><th>Pace (min/mi)</th><th>Cumulative</th></tr></thead>"
+        f"<thead><tr><th>{mark_header}</th><th>Gain ({vert_unit})</th><th>Split</th><th>Pace (min/{dist_unit})</th><th>Cumulative</th></tr></thead>"
         "<tbody>" + "".join(rows) + "</tbody></table>"
         "</div>"
     )
@@ -341,8 +443,21 @@ def render():
   document.getElementById("smooth").disabled = false;
   document.getElementById("time").disabled = false;
   document.getElementById("gap").disabled = false;
+  document.getElementById("pace").disabled = false;
   document.getElementById("fatigue").disabled = false;
-  document.getElementById("show-derived-gap").disabled = false;
+  // document.getElementById("show-derived-gap").disabled = false;
+  document.getElementById("units").disabled = false;
+  document.getElementById("splits-mode").disabled = false;
+}
+
+function distConv() {
+  return unitsMode === "metric" ? KM_PER_MI : 1.0;
+}
+
+function updateUnitLabels() {
+  const unit = unitsMode === "metric" ? "km" : "mi";
+  document.querySelector("label[for=gap]").textContent = `Target average GAP (mm:ss/${unit}):`;
+  document.querySelector("label[for=pace]").textContent = `Target average pace (mm:ss/${unit}):`;
 }
 
 function parseHMS(s) {
@@ -392,9 +507,14 @@ function bindEvents() {
     const defaultMin = pyodide.globals.get("default_initial_time_minutes")();
     if (defaultMin !== null) {
       document.getElementById("time").value = formatHMS(defaultMin);
+      const dc = distConv();
       const totalEffort = pyodide.globals.get("total_effort_mi_current")();
       if (totalEffort !== null && totalEffort > 0) {
-        document.getElementById("gap").value = formatMS(defaultMin / totalEffort);
+        document.getElementById("gap").value = formatMS(defaultMin / (totalEffort * dc));
+      }
+      const totalDist = pyodide.globals.get("total_distance_mi_current")();
+      if (totalDist !== null && totalDist > 0) {
+        document.getElementById("pace").value = formatMS(defaultMin / (totalDist * dc));
       }
       pyodide.globals.get("set_total_time")(defaultMin);
     }
@@ -413,6 +533,7 @@ function bindEvents() {
 
   const timeInput = document.getElementById("time");
   const gapInput = document.getElementById("gap");
+  const paceInput = document.getElementById("pace");
 
   timeInput.addEventListener("change", () => {
     const minutes = parseHMS(timeInput.value);
@@ -421,17 +542,22 @@ function bindEvents() {
       return;
     }
     pyodide.globals.get("set_total_time")(minutes);
+    const dc = distConv();
     const totalEffort = pyodide.globals.get("total_effort_mi_current")();
     if (totalEffort !== null && totalEffort > 0) {
-      gapInput.value = formatMS(minutes / totalEffort);
+      gapInput.value = formatMS(minutes / (totalEffort * dc));
+    }
+    const totalDist = pyodide.globals.get("total_distance_mi_current")();
+    if (totalDist !== null && totalDist > 0) {
+      paceInput.value = formatMS(minutes / (totalDist * dc));
     }
     scheduleRender();
   });
 
-  document.getElementById("show-derived-gap").addEventListener("change", (e) => {
-    pyodide.globals.get("set_show_derived_gap")(e.target.checked);
-    scheduleRender();
-  });
+  // document.getElementById("show-derived-gap").addEventListener("change", (e) => {
+  //   pyodide.globals.get("set_show_derived_gap")(e.target.checked);
+  //   scheduleRender();
+  // });
 
   document.getElementById("fatigue").addEventListener("change", (e) => {
     const pct = parseFloat(e.target.value);
@@ -454,9 +580,60 @@ function bindEvents() {
       setStatus("Upload a GPX file first.");
       return;
     }
-    const totalMin = gapPace * totalEffort;
+    const dc = distConv();
+    const totalMin = gapPace * totalEffort * dc;
     timeInput.value = formatHMS(totalMin);
+    const totalDist = pyodide.globals.get("total_distance_mi_current")();
+    if (totalDist !== null && totalDist > 0) {
+      paceInput.value = formatMS(totalMin / (totalDist * dc));
+    }
     pyodide.globals.get("set_total_time")(totalMin);
+    scheduleRender();
+  });
+
+  paceInput.addEventListener("change", () => {
+    const pace = parseMS(paceInput.value);
+    if (pace === null) {
+      setStatus("Invalid pace format — use mm:ss.");
+      return;
+    }
+    const totalDist = pyodide.globals.get("total_distance_mi_current")();
+    if (totalDist === null) {
+      setStatus("Upload a GPX file first.");
+      return;
+    }
+    const dc = distConv();
+    const totalMin = pace * totalDist * dc;
+    timeInput.value = formatHMS(totalMin);
+    const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+    if (totalEffort !== null && totalEffort > 0) {
+      gapInput.value = formatMS(totalMin / (totalEffort * dc));
+    }
+    pyodide.globals.get("set_total_time")(totalMin);
+    scheduleRender();
+  });
+
+  document.getElementById("splits-mode").addEventListener("change", (e) => {
+    pyodide.globals.get("set_splits_mode")(e.target.value);
+    scheduleRender();
+  });
+
+  document.getElementById("units").addEventListener("change", (e) => {
+    unitsMode = e.target.value;
+    pyodide.globals.get("set_units")(unitsMode);
+    updateUnitLabels();
+    const totalMin = parseHMS(timeInput.value);
+    if (totalMin !== null) {
+      const dc = distConv();
+      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+      if (totalEffort !== null && totalEffort > 0) {
+        gapInput.value = formatMS(totalMin / (totalEffort * dc));
+      }
+      const totalDist = pyodide.globals.get("total_distance_mi_current")();
+      if (totalDist !== null && totalDist > 0) {
+        paceInput.value = formatMS(totalMin / (totalDist * dc));
+      }
+    }
     scheduleRender();
   });
 }

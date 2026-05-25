@@ -91,6 +91,30 @@ def _haversine(lat1, lon1, lat2, lon2):
     return 2 * EARTH_RADIUS_M * np.arcsin(np.sqrt(a))
 
 
+def parse_waypoints(path):
+    """Extract named ``<wpt>`` elements from a GPX file.
+
+    Returns a list of ``(latitude, longitude, name)`` tuples for every
+    top-level waypoint that has a ``<name>`` child with text. Waypoints
+    without names are skipped.
+    """
+    tree = ElementTree.parse(path)
+    root = tree.getroot()
+    ns_uri = root.tag[root.tag.find("{") + 1 : root.tag.find("}")] if root.tag.startswith("{") else ""
+    ns = {"gpx": ns_uri} if ns_uri else {}
+    prefix = "gpx:" if ns else ""
+    result = []
+    for wpt in root.iterfind(f".//{prefix}wpt", ns):
+        name_el = wpt.find(f"{prefix}name", ns)
+        if name_el is None or name_el.text is None:
+            continue
+        name = name_el.text.strip()
+        if not name:
+            continue
+        result.append((float(wpt.attrib["lat"]), float(wpt.attrib["lon"]), name))
+    return result
+
+
 def _parse_gpx_points(path):
     """Extract (lat, lon, elevation) arrays from every ``<trkpt>`` in a GPX file.
 
@@ -139,6 +163,8 @@ class ElevationProfile:
     elevation: np.ndarray
     grade: np.ndarray
     gap_factor: np.ndarray
+    latitude: np.ndarray
+    longitude: np.ndarray
 
     @classmethod
     def from_gpx(cls, path, smoothing_length=50.0):
@@ -176,7 +202,14 @@ class ElevationProfile:
 
         grade = np.gradient(elevation, distance) * 100.0
         gap_factor = _gap_factor(grade)
-        return cls(distance=distance, elevation=elevation, grade=grade, gap_factor=gap_factor)
+        return cls(
+            distance=distance,
+            elevation=elevation,
+            grade=grade,
+            gap_factor=gap_factor,
+            latitude=lat,
+            longitude=lon,
+        )
     
     def constant_gap_split_time(self, total_time_minutes, fatigue_rate_per_hour=0.0):
         """Elapsed time (minutes) at each track point.

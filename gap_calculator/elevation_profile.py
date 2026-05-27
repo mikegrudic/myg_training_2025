@@ -245,7 +245,7 @@ class ElevationProfile:
             longitude=lon,
             time_seconds=time_seconds,
         )
-    
+
     def constant_gap_split_time(self, total_time_minutes, fatigue_rate_per_hour=0.0):
         """Elapsed time (minutes) at each track point.
 

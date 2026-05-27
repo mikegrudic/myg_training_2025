@@ -1,3 +1,4 @@
+import datetime
 from dataclasses import dataclass
 from functools import cache
 from xml.etree import ElementTree
@@ -23,18 +24,10 @@ def _load_gap_table():
     return grade, factor
 
 
-def _gap_factor(grade_percent):
-    """Look up the Strava GAP factor for one or more grade values.
-
-    Linearly interpolates within the tabulated grade range, and
-    linearly extrapolates outside it using the slope of the two
-    nearest endpoint samples.
-
-    Parameters
-    ----------
-    grade_percent : array_like
-        Grade(s) in percent (rise/run * 100).
-    """
+def _strava_gap_factor(grade_percent):
+    """Strava GAP factor at one or more grade values, by interpolating the
+    tabulated Strava grade-vs-factor curve and linearly extrapolating
+    beyond its endpoints."""
     grade_table, factor_table = _load_gap_table()
     grade_percent = np.asarray(grade_percent, dtype=float)
     factor = np.interp(grade_percent, grade_table, factor_table)
@@ -50,6 +43,28 @@ def _gap_factor(grade_percent):
         factor[above] = factor_table[-1] + slope * (grade_percent[above] - grade_table[-1])
 
     return factor
+
+
+def _minetti_gap_factor(grade_percent):
+    """Minetti et al. (2002) energetic cost of running on graded terrain,
+    normalized to the flat-ground cost. Polynomial fit:
+
+        C_r(i) = 155.4 i^5 - 30.4 i^4 - 43.3 i^3 + 46.3 i^2 + 19.5 i + 3.6
+
+    where ``i`` is the dimensionless grade (rise/run) and ``C_r(0) = 3.6``.
+    Validated over i in [-0.45, +0.45]; extrapolates polynomially outside.
+    """
+    i = np.asarray(grade_percent, dtype=float) / 100.0
+    c_r = 155.4 * i**5 - 30.4 * i**4 - 43.3 * i**3 + 46.3 * i**2 + 19.5 * i + 3.6
+    return c_r / 3.6
+
+
+def _gap_factor(grade_percent, model="strava"):
+    """Dispatch a grade-adjustment model. ``model`` is ``"strava"`` (default)
+    or ``"minetti"``."""
+    if model == "minetti":
+        return _minetti_gap_factor(grade_percent)
+    return _strava_gap_factor(grade_percent)
 
 
 def _iir_smooth(values, step, length):
@@ -128,7 +143,7 @@ def _parse_gpx_points(path):
     ns = {"gpx": ns_uri} if ns_uri else {}
     prefix = "gpx:" if ns else ""
 
-    lats, lons, eles = [], [], []
+    lats, lons, eles, times = [], [], [], []
     for pt in root.iterfind(f".//{prefix}trkpt", ns):
         ele_el = pt.find(f"{prefix}ele", ns)
         if ele_el is None or ele_el.text is None:
@@ -136,7 +151,16 @@ def _parse_gpx_points(path):
         lats.append(float(pt.attrib["lat"]))
         lons.append(float(pt.attrib["lon"]))
         eles.append(float(ele_el.text))
-    return np.array(lats), np.array(lons), np.array(eles)
+        time_el = pt.find(f"{prefix}time", ns)
+        if time_el is not None and time_el.text is not None:
+            try:
+                t = datetime.datetime.fromisoformat(time_el.text.replace("Z", "+00:00"))
+                times.append(t.timestamp())
+            except ValueError:
+                times.append(np.nan)
+        else:
+            times.append(np.nan)
+    return np.array(lats), np.array(lons), np.array(eles), np.array(times)
 
 
 @dataclass
@@ -165,16 +189,17 @@ class ElevationProfile:
     gap_factor: np.ndarray
     latitude: np.ndarray
     longitude: np.ndarray
+    time_seconds: np.ndarray
 
     @classmethod
-    def from_gpx(cls, path, smoothing_length=50.0):
+    def from_gpx(cls, path, smoothing_length=50.0, model="strava"):
         """Build an ElevationProfile from a GPX track.
 
         Parses ``<trkpt>`` elements (with ``<ele>`` children), computes
         cumulative distance along the track using the haversine formula,
         optionally smooths the elevation series with a single-pole IIR
-        filter, then derives grade (in percent) and the corresponding
-        Strava GAP factor at each point.
+        filter, then derives grade (in percent) and a grade-adjustment
+        factor at each point.
 
         Parameters
         ----------
@@ -186,22 +211,31 @@ class ElevationProfile:
             set to ``0`` to disable. Larger values suppress more
             high-frequency altimeter/GPS noise at the cost of phase lag
             and reduced grade resolution.
+        model : str, optional
+            Grade-adjustment model: ``"strava"`` (default) uses the
+            tabulated Strava GAP curve; ``"minetti"`` uses the Minetti
+            et al. (2002) polynomial fit.
         """
-        lat, lon, elevation = _parse_gpx_points(path)
+        lat, lon, elevation, time_abs = _parse_gpx_points(path)
         if len(lat) < 2:
             raise ValueError(f"GPX file {path} contains fewer than 2 track points with elevation")
 
         segment_lengths = _haversine(lat[:-1], lon[:-1], lat[1:], lon[1:])
         keep = np.concatenate(([True], segment_lengths > 0))
-        lat, lon, elevation = lat[keep], lon[keep], elevation[keep]
+        lat, lon, elevation, time_abs = lat[keep], lon[keep], elevation[keep], time_abs[keep]
         segment_lengths = _haversine(lat[:-1], lon[:-1], lat[1:], lon[1:])
         distance = np.concatenate(([0.0], np.cumsum(segment_lengths)))
 
         if smoothing_length > 0:
             elevation = _iir_smooth(elevation, segment_lengths, smoothing_length)
 
+        if np.any(np.isfinite(time_abs)):
+            time_seconds = time_abs - np.nanmin(time_abs)
+        else:
+            time_seconds = time_abs
+
         grade = np.gradient(elevation, distance) * 100.0
-        gap_factor = _gap_factor(grade)
+        gap_factor = _gap_factor(grade, model=model)
         return cls(
             distance=distance,
             elevation=elevation,
@@ -209,6 +243,7 @@ class ElevationProfile:
             gap_factor=gap_factor,
             latitude=lat,
             longitude=lon,
+            time_seconds=time_seconds,
         )
     
     def constant_gap_split_time(self, total_time_minutes, fatigue_rate_per_hour=0.0):

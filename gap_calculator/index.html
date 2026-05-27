@@ -68,6 +68,17 @@ Note that the grade-adjustment model (the same as used by Strava) is calibrated 
     </select>
   </div>
   <div class="control-row">
+    <label for="gap-model">Grade-adjustment model:</label>
+    <select id="gap-model" disabled>
+      <option value="strava" selected>Strava</option>
+      <option value="minetti">Minetti 2002</option>
+    </select>
+  </div>
+  <div class="control-row">
+    <label for="show-gpx-pace">Overplot pace from GPX (if available):</label>
+    <input type="checkbox" id="show-gpx-pace" disabled>
+  </div>
+  <div class="control-row">
     <label for="splits-mode">Splits:</label>
     <select id="splits-mode" disabled>
       <option value="distance" selected>Distance only</option>
@@ -130,7 +141,7 @@ def _pace_tick(min_per_mi, _pos):
         return ""
     return _format_clock(min_per_mi * 60)
 
-_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance"}
+_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False}
 
 M_TO_MI = 0.0006213711922
 M_TO_FT = 3.280839895
@@ -159,6 +170,13 @@ def set_units(units):
 def set_splits_mode(mode):
     if mode in ("distance", "distance-waypoints", "waypoints"):
         _state["splits_mode"] = mode
+
+def set_gap_model(model):
+    if model in ("strava", "minetti"):
+        _state["gap_model"] = model
+
+def set_show_gpx_pace(flag):
+    _state["show_gpx_pace"] = bool(flag)
 
 def _total_effort_mi(profile, distance_mi):
     avg_factor = 0.5 * (profile.gap_factor[:-1] + profile.gap_factor[1:])
@@ -199,6 +217,7 @@ def default_initial_time_minutes():
     profile = ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
+        model=_state["gap_model"],
     )
     distance_mi = profile.distance * M_TO_MI
     effort = _total_effort_mi(profile, distance_mi)
@@ -213,6 +232,7 @@ def total_effort_mi_current():
     profile = ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
+        model=_state["gap_model"],
     )
     distance_mi = profile.distance * M_TO_MI
     return _total_effort_mi(profile, distance_mi)
@@ -227,12 +247,27 @@ def total_distance_mi_current():
     )
     return float(profile.distance[-1] * M_TO_MI)
 
+def gpx_total_time_minutes():
+    """Elapsed time (minutes) of the loaded GPX if it has time data,
+    or None otherwise."""
+    if _state["bytes"] is None:
+        return None
+    profile = ElevationProfile.from_gpx(
+        io.BytesIO(_state["bytes"]),
+        smoothing_length=_state["smoothing"],
+        model=_state["gap_model"],
+    )
+    if not np.any(np.isfinite(profile.time_seconds)):
+        return None
+    return float(np.nanmax(profile.time_seconds) / 60.0)
+
 def render():
     if _state["bytes"] is None:
         return ""
     profile = ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
+        model=_state["gap_model"],
     )
 
     metric = _state["units"] == "metric"
@@ -280,11 +315,17 @@ def render():
     ax_gap.axhline(1, color="k", lw=0.3)
     ax_gap.set_ylabel(f"Relative effort per {dist_unit}")
 
-    ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color="black", label="actual")
-    # if _state["show_derived_gap"]:
-    #     derived_gap_series = pace_min_per_unit_series / profile.gap_factor
-    #     ax_pace.plot(distance, derived_gap_series, lw=0.8, color="black", ls="--", label="pace ÷ gap_factor")
-    #     ax_pace.legend(loc="best", fontsize=8)
+    ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color="black", label="model")
+    if _state["show_gpx_pace"] and np.any(np.isfinite(profile.time_seconds)):
+        valid = np.isfinite(profile.time_seconds)
+        t_valid = profile.time_seconds[valid]
+        d_valid = distance[valid]
+        if t_valid[-1] > t_valid[0]:
+            t_grid = np.arange(t_valid[0], t_valid[-1], 60.0)
+            d_grid = np.interp(t_grid, t_valid, d_valid)
+            gpx_pace = np.gradient(t_grid / 60.0, d_grid)
+            ax_pace.plot(d_grid, gpx_pace, lw=0.8, color="red", alpha=0.5, label="from GPX")
+            ax_pace.legend(loc="best", fontsize=8)
     ax_pace.set_yscale("log")
     ax_pace.invert_yaxis()
     ax_pace.set_ylabel(f"Pace (min:sec/{dist_unit})")
@@ -337,7 +378,6 @@ def render():
         f"<span><strong>{total_effort_disp:.2f} {dist_unit}</strong>GAP-adjusted distance</span>"
         f"<span><strong>{gain_disp:,.0f} {vert_unit}</strong>Total gain</span>"
         f"<span><strong>{profile.grade.min():+.1f} / {profile.grade.max():+.1f} %</strong>Grade range</span>"
-        f"<span><strong>{float(np.median(profile.gap_factor)):.2f}&times;</strong>Median GAP factor</span>"
         f"<span><strong>{pace_min}:{pace_sec:02d} /{dist_unit}</strong>Average pace</span>"
         f"<span><strong>{avg_speed:.2f} {speed_unit}</strong>Average speed</span>"
         f"<span><strong>{gap_min}:{gap_sec:02d} /{dist_unit}</strong>Average GAP</span>"
@@ -438,7 +478,17 @@ def render():
   `);
 
   bindEvents();
-  setStatus("Ready. Upload a GPX file to begin.");
+  setStatus("Loading default route…");
+  try {
+    const defaultResp = await fetch("Escarpment_Race.gpx" + bust);
+    if (defaultResp.ok) {
+      const defaultBuf = await defaultResp.arrayBuffer();
+      ingestGpxBytes(defaultBuf, {totalMinutes: 360, splitsMode: "distance-waypoints"});
+    }
+  } catch (e) {
+    console.warn("Could not load default GPX:", e);
+  }
+  setStatus("Ready. Upload a GPX file or use the default route.");
   document.getElementById("gpx").disabled = false;
   document.getElementById("smooth").disabled = false;
   document.getElementById("time").disabled = false;
@@ -448,6 +498,8 @@ def render():
   // document.getElementById("show-derived-gap").disabled = false;
   document.getElementById("units").disabled = false;
   document.getElementById("splits-mode").disabled = false;
+  document.getElementById("gap-model").disabled = false;
+  document.getElementById("show-gpx-pace").disabled = false;
 }
 
 function distConv() {
@@ -498,27 +550,41 @@ function setStatus(msg) {
   document.getElementById("status").textContent = msg;
 }
 
+function ingestGpxBytes(arrayBuf, overrides = {}) {
+  pyodide.globals.get("set_bytes")(new Uint8Array(arrayBuf));
+  if (overrides.splitsMode) {
+    pyodide.globals.get("set_splits_mode")(overrides.splitsMode);
+    document.getElementById("splits-mode").value = overrides.splitsMode;
+  }
+  let defaultMin;
+  if (overrides.totalMinutes !== undefined) {
+    defaultMin = overrides.totalMinutes;
+  } else {
+    const gpxMin = pyodide.globals.get("gpx_total_time_minutes")();
+    defaultMin = gpxMin ?? pyodide.globals.get("default_initial_time_minutes")();
+  }
+  if (defaultMin !== null) {
+    document.getElementById("time").value = formatHMS(defaultMin);
+    const dc = distConv();
+    const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+    if (totalEffort !== null && totalEffort > 0) {
+      document.getElementById("gap").value = formatMS(defaultMin / (totalEffort * dc));
+    }
+    const totalDist = pyodide.globals.get("total_distance_mi_current")();
+    if (totalDist !== null && totalDist > 0) {
+      document.getElementById("pace").value = formatMS(defaultMin / (totalDist * dc));
+    }
+    pyodide.globals.get("set_total_time")(defaultMin);
+  }
+  scheduleRender();
+}
+
 function bindEvents() {
   document.getElementById("gpx").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const buf = await file.arrayBuffer();
-    pyodide.globals.get("set_bytes")(new Uint8Array(buf));
-    const defaultMin = pyodide.globals.get("default_initial_time_minutes")();
-    if (defaultMin !== null) {
-      document.getElementById("time").value = formatHMS(defaultMin);
-      const dc = distConv();
-      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
-      if (totalEffort !== null && totalEffort > 0) {
-        document.getElementById("gap").value = formatMS(defaultMin / (totalEffort * dc));
-      }
-      const totalDist = pyodide.globals.get("total_distance_mi_current")();
-      if (totalDist !== null && totalDist > 0) {
-        document.getElementById("pace").value = formatMS(defaultMin / (totalDist * dc));
-      }
-      pyodide.globals.get("set_total_time")(defaultMin);
-    }
-    scheduleRender();
+    ingestGpxBytes(buf);
   });
 
   const slider = document.getElementById("smooth");
@@ -615,6 +681,24 @@ function bindEvents() {
 
   document.getElementById("splits-mode").addEventListener("change", (e) => {
     pyodide.globals.get("set_splits_mode")(e.target.value);
+    scheduleRender();
+  });
+
+  document.getElementById("show-gpx-pace").addEventListener("change", (e) => {
+    pyodide.globals.get("set_show_gpx_pace")(e.target.checked);
+    scheduleRender();
+  });
+
+  document.getElementById("gap-model").addEventListener("change", (e) => {
+    pyodide.globals.get("set_gap_model")(e.target.value);
+    const totalMin = parseHMS(timeInput.value);
+    if (totalMin !== null) {
+      const dc = distConv();
+      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+      if (totalEffort !== null && totalEffort > 0) {
+        gapInput.value = formatMS(totalMin / (totalEffort * dc));
+      }
+    }
     scheduleRender();
   });
 

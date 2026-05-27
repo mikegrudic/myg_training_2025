@@ -123,7 +123,7 @@ import matplotlib
 matplotlib.use("Agg")
 import numpy as np
 from matplotlib import pyplot as plt
-from matplotlib.ticker import FuncFormatter, MultipleLocator, FixedLocator, NullLocator
+from matplotlib.ticker import FuncFormatter, MaxNLocator, FixedLocator, NullLocator
 from elevation_profile import ElevationProfile, parse_waypoints, _haversine
 
 
@@ -341,7 +341,7 @@ def render():
     ax_vspeed.set_ylabel(f"Vertical speed ({vert_unit}/h)")
 
     for ax in (ax_elev, ax_grade, ax_gap, ax_pace, ax_split, ax_vspeed):
-        ax.xaxis.set_major_locator(MultipleLocator(1.0))
+        ax.xaxis.set_major_locator(MaxNLocator(nbins=20, steps=[1, 2, 5, 10]))
         ax.set_xlim(0, distance[-1])
         ax.set_xlabel(f"Distance ({dist_unit})")
         ax.tick_params(labelbottom=True)

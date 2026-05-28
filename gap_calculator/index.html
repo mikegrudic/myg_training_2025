@@ -79,6 +79,10 @@ Note that the grade-adjustment model (the same as used by Strava) is calibrated 
     <input type="checkbox" id="show-gpx-pace" disabled>
   </div>
   <div class="control-row">
+    <label for="reverse">Reverse route:</label>
+    <input type="checkbox" id="reverse" disabled>
+  </div>
+  <div class="control-row">
     <label for="splits-mode">Splits:</label>
     <select id="splits-mode" disabled>
       <option value="distance" selected>Distance only</option>
@@ -141,7 +145,7 @@ def _pace_tick(min_per_mi, _pos):
         return ""
     return _format_clock(min_per_mi * 60)
 
-_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False}
+_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False}
 
 M_TO_MI = 0.0006213711922
 M_TO_FT = 3.280839895
@@ -177,6 +181,9 @@ def set_gap_model(model):
 
 def set_show_gpx_pace(flag):
     _state["show_gpx_pace"] = bool(flag)
+
+def set_reverse(flag):
+    _state["reverse"] = bool(flag)
 
 def _total_effort_mi(profile, distance_mi):
     avg_factor = 0.5 * (profile.gap_factor[:-1] + profile.gap_factor[1:])
@@ -218,6 +225,7 @@ def default_initial_time_minutes():
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
+        reverse=_state["reverse"],
     )
     distance_mi = profile.distance * M_TO_MI
     effort = _total_effort_mi(profile, distance_mi)
@@ -233,6 +241,7 @@ def total_effort_mi_current():
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
+        reverse=_state["reverse"],
     )
     distance_mi = profile.distance * M_TO_MI
     return _total_effort_mi(profile, distance_mi)
@@ -244,6 +253,7 @@ def total_distance_mi_current():
     profile = ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
+        reverse=_state["reverse"],
     )
     return float(profile.distance[-1] * M_TO_MI)
 
@@ -256,6 +266,7 @@ def gpx_total_time_minutes():
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
+        reverse=_state["reverse"],
     )
     if not np.any(np.isfinite(profile.time_seconds)):
         return None
@@ -268,6 +279,7 @@ def render():
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
+        reverse=_state["reverse"],
     )
 
     metric = _state["units"] == "metric"
@@ -387,16 +399,38 @@ def render():
     finish_unit = distance[-1]
     splits_mode = _state["splits_mode"]
 
-    # Collect waypoint marks (used by both -waypoints modes)
+    # Collect waypoint marks (used by both -waypoints modes). A single waypoint
+    # can be visited more than once by the route (loops, out-and-backs); each
+    # contiguous run within the proximity threshold counts as one visit.
+    # Each trackpoint is assigned to its single nearest waypoint, so closely-
+    # spaced waypoints (e.g., adjacent summits) don't alias onto each other.
     waypoint_marks = []  # list of (distance_in_units, label_with_mileage)
     if splits_mode in ("distance-waypoints", "waypoints"):
-        for wp_lat, wp_lon, name in parse_waypoints(io.BytesIO(_state["bytes"])):
-            d_to_route = _haversine(wp_lat, wp_lon, profile.latitude, profile.longitude)
-            idx = int(np.argmin(d_to_route))
-            if d_to_route[idx] < 500.0:
-                wp_dist = float(distance[idx])
-                label = f"{name} ({wp_dist:.2f} {dist_unit})"
-                waypoint_marks.append((wp_dist, label))
+        all_wps = parse_waypoints(io.BytesIO(_state["bytes"]))
+        if all_wps:
+            threshold_m = 100.0
+            distances_to_wps = np.array([
+                _haversine(wp_lat, wp_lon, profile.latitude, profile.longitude)
+                for wp_lat, wp_lon, _ in all_wps
+            ])  # shape (n_wps, n_trkpts)
+            nearest_wp = np.argmin(distances_to_wps, axis=0)
+            for wi, (_, _, name) in enumerate(all_wps):
+                d = distances_to_wps[wi]
+                is_visit = (nearest_wp == wi) & (d < threshold_m)
+                if not np.any(is_visit):
+                    continue
+                transitions = np.diff(is_visit.astype(np.int8))
+                starts = np.where(transitions == 1)[0] + 1
+                ends = np.where(transitions == -1)[0] + 1
+                if is_visit[0]:
+                    starts = np.concatenate(([0], starts))
+                if is_visit[-1]:
+                    ends = np.concatenate((ends, [len(is_visit)]))
+                for s, e in zip(starts, ends):
+                    idx = s + int(np.argmin(d[s:e]))
+                    wp_dist = float(distance[idx])
+                    label = f"{name} ({wp_dist:.2f} {dist_unit})"
+                    waypoint_marks.append((wp_dist, label))
         waypoint_marks.sort(key=lambda x: x[0])
 
     # Marks that act as splits (full row with gain/split/pace).
@@ -500,6 +534,7 @@ def render():
   document.getElementById("splits-mode").disabled = false;
   document.getElementById("gap-model").disabled = false;
   document.getElementById("show-gpx-pace").disabled = false;
+  document.getElementById("reverse").disabled = false;
 }
 
 function distConv() {
@@ -686,6 +721,19 @@ function bindEvents() {
 
   document.getElementById("show-gpx-pace").addEventListener("change", (e) => {
     pyodide.globals.get("set_show_gpx_pace")(e.target.checked);
+    scheduleRender();
+  });
+
+  document.getElementById("reverse").addEventListener("change", (e) => {
+    pyodide.globals.get("set_reverse")(e.target.checked);
+    const totalMin = parseHMS(timeInput.value);
+    if (totalMin !== null) {
+      const dc = distConv();
+      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+      if (totalEffort !== null && totalEffort > 0) {
+        gapInput.value = formatMS(totalMin / (totalEffort * dc));
+      }
+    }
     scheduleRender();
   });
 

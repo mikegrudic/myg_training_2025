@@ -192,7 +192,7 @@ class ElevationProfile:
     time_seconds: np.ndarray
 
     @classmethod
-    def from_gpx(cls, path, smoothing_length=50.0, model="strava"):
+    def from_gpx(cls, path, smoothing_length=50.0, model="strava", reverse=False):
         """Build an ElevationProfile from a GPX track.
 
         Parses ``<trkpt>`` elements (with ``<ele>`` children), computes
@@ -215,8 +215,17 @@ class ElevationProfile:
             Grade-adjustment model: ``"strava"`` (default) uses the
             tabulated Strava GAP curve; ``"minetti"`` uses the Minetti
             et al. (2002) polynomial fit.
+        reverse : bool, optional
+            If True, reverse the trackpoint order so the route is
+            traversed end-to-start. Time data is discarded since it would
+            be meaningless for the reversed direction.
         """
         lat, lon, elevation, time_abs = _parse_gpx_points(path)
+        if reverse:
+            lat = lat[::-1]
+            lon = lon[::-1]
+            elevation = elevation[::-1]
+            time_abs = np.full_like(time_abs, np.nan)
         if len(lat) < 2:
             raise ValueError(f"GPX file {path} contains fewer than 2 track points with elevation")
 

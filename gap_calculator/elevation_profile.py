@@ -192,7 +192,7 @@ class ElevationProfile:
     time_seconds: np.ndarray
 
     @classmethod
-    def from_gpx(cls, path, smoothing_length=50.0, model="strava", reverse=False):
+    def from_gpx(cls, path, smoothing_length=30.0, model="strava", reverse=False):
         """Build an ElevationProfile from a GPX track.
 
         Parses ``<trkpt>`` elements (with ``<ele>`` children), computes
@@ -207,7 +207,7 @@ class ElevationProfile:
             Path to the GPX file.
         smoothing_length : float, optional
             E-folding length (meters) for IIR smoothing applied to the
-            elevation series before grade is computed. Defaults to ``50``;
+            elevation series before grade is computed. Defaults to ``30``;
             set to ``0`` to disable. Larger values suppress more
             high-frequency altimeter/GPS noise at the cost of phase lag
             and reduced grade resolution.

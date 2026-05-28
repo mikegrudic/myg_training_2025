@@ -41,8 +41,8 @@ Note that the grade-adjustment model (the same as used by Strava) is calibrated 
     <input type="file" id="gpx" accept=".gpx" disabled>
   </div>
   <div class="control-row">
-    <label for="smooth">Elevation smoothing (m): <span id="smooth-val">50</span></label>
-    <input type="range" id="smooth" min="0" max="1000" value="50" step="10" disabled>
+    <label for="smooth">Elevation smoothing (m): <span id="smooth-val">30</span></label>
+    <input type="range" id="smooth" min="0" max="1000" value="30" step="10" disabled>
   </div>
   <div class="control-row">
     <label for="time">Target total time (hh:mm:ss):</label>
@@ -59,6 +59,10 @@ Note that the grade-adjustment model (the same as used by Strava) is calibrated 
   <div class="control-row">
     <label for="fatigue">Fatigue (% GAP decay per hour):</label>
     <input type="number" id="fatigue" value="0" min="0" max="50" step="0.5" size="5" disabled>
+  </div>
+  <div class="control-row">
+    <label for="split-pct">Positive/Negative split % (overrides fatigue):</label>
+    <input type="number" id="split-pct" value="0" min="-50" max="100" step="1" size="5" disabled>
   </div>
   <div class="control-row">
     <label for="units">Units:</label>
@@ -145,7 +149,7 @@ def _pace_tick(min_per_mi, _pos):
         return ""
     return _format_clock(min_per_mi * 60)
 
-_state = {"bytes": None, "smoothing": 50.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False}
+_state = {"bytes": None, "smoothing": 30.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "split_pct": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False}
 
 M_TO_MI = 0.0006213711922
 M_TO_FT = 3.280839895
@@ -166,6 +170,9 @@ def set_total_time(minutes):
 
 def set_fatigue(rate_per_hour):
     _state["fatigue_rate_per_hour"] = float(rate_per_hour)
+
+def set_split_pct(pct):
+    _state["split_pct"] = float(pct)
 
 def set_units(units):
     if units in ("imperial", "metric"):
@@ -300,9 +307,22 @@ def render():
 
     distance_mi = profile.distance * M_TO_MI  # for effort computation only
     gain_disp = float(np.sum(np.maximum(0.0, np.diff(elevation))))
+    # Positive/Negative split %, if set, overrides the per-hour fatigue rate.
+    # Maps R = 1 + split%/100 to an exponential rate f = R^(1/T_hours) - 1 so
+    # the final GAP pace equals R x the initial GAP pace.
+    if _state["split_pct"] != 0.0:
+        R = 1.0 + _state["split_pct"] / 100.0
+        T_hours = _state["total_time_minutes"] / 60.0
+        if R > 0 and T_hours > 0:
+            effective_fatigue = R ** (1.0 / T_hours) - 1.0
+        else:
+            effective_fatigue = 0.0
+    else:
+        effective_fatigue = _state["fatigue_rate_per_hour"]
+
     split_minutes = profile.constant_gap_split_time(
         _state["total_time_minutes"],
-        fatigue_rate_per_hour=_state["fatigue_rate_per_hour"],
+        fatigue_rate_per_hour=effective_fatigue,
     )
     split_hours = split_minutes / 60.0
     pace_min_per_unit_series = np.gradient(split_minutes, distance)
@@ -382,17 +402,38 @@ def render():
         gap_min += 1
         gap_sec = 0
 
+    T_hours = _state["total_time_minutes"] / 60.0
+    k_eff = np.log1p(effective_fatigue)
+    if abs(k_eff) < 1e-12 or T_hours <= 0:
+        initial_gap_pace = gap_pace_min_per_unit
+    else:
+        initial_gap_pace = 60.0 * (1.0 - np.exp(-k_eff * T_hours)) / (k_eff * total_effort_disp)
+    final_gap_pace = initial_gap_pace * (1.0 + effective_fatigue) ** T_hours
+
+    def _format_pace(p):
+        m = int(p)
+        s = int(round((p - m) * 60))
+        if s == 60:
+            m += 1
+            s = 0
+        return f"{m}:{s:02d}"
+
+    initial_gap_str = _format_pace(initial_gap_pace)
+    final_gap_str = _format_pace(final_gap_pace)
+
     avg_speed = distance[-1] / (_state["total_time_minutes"] / 60.0)
 
     metrics_html = (
         "<div class='metrics'>"
         f"<span><strong>{distance[-1]:.2f} {dist_unit}</strong>Distance</span>"
-        f"<span><strong>{total_effort_disp:.2f} {dist_unit}</strong>GAP-adjusted distance</span>"
+        f"<span><strong>{total_effort_disp:.2f} {dist_unit}</strong>Equivalent flat distance</span>"
         f"<span><strong>{gain_disp:,.0f} {vert_unit}</strong>Total gain</span>"
         f"<span><strong>{profile.grade.min():+.1f} / {profile.grade.max():+.1f} %</strong>Grade range</span>"
         f"<span><strong>{pace_min}:{pace_sec:02d} /{dist_unit}</strong>Average pace</span>"
         f"<span><strong>{avg_speed:.2f} {speed_unit}</strong>Average speed</span>"
         f"<span><strong>{gap_min}:{gap_sec:02d} /{dist_unit}</strong>Average GAP</span>"
+        f"<span><strong>{initial_gap_str} /{dist_unit}</strong>Initial GAP</span>"
+        f"<span><strong>{final_gap_str} /{dist_unit}</strong>Final GAP</span>"
         "</div>"
     )
 
@@ -541,6 +582,7 @@ def render():
   document.getElementById("gap").disabled = false;
   document.getElementById("pace").disabled = false;
   document.getElementById("fatigue").disabled = false;
+  document.getElementById("split-pct").disabled = false;
   // document.getElementById("show-derived-gap").disabled = false;
   document.getElementById("units").disabled = false;
   document.getElementById("splits-mode").disabled = false;
@@ -679,6 +721,16 @@ function bindEvents() {
       return;
     }
     pyodide.globals.get("set_fatigue")(pct / 100.0);
+    scheduleRender();
+  });
+
+  document.getElementById("split-pct").addEventListener("change", (e) => {
+    const pct = parseFloat(e.target.value);
+    if (!isFinite(pct)) {
+      setStatus("Invalid split %.");
+      return;
+    }
+    pyodide.globals.get("set_split_pct")(pct);
     scheduleRender();
   });
 

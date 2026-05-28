@@ -414,6 +414,7 @@ def render():
                 for wp_lat, wp_lon, _ in all_wps
             ])  # shape (n_wps, n_trkpts)
             nearest_wp = np.argmin(distances_to_wps, axis=0)
+            merge_threshold_m = 500.0  # merge same-waypoint visits closer than this in route distance
             for wi, (_, _, name) in enumerate(all_wps):
                 d = distances_to_wps[wi]
                 is_visit = (nearest_wp == wi) & (d < threshold_m)
@@ -426,8 +427,19 @@ def render():
                     starts = np.concatenate(([0], starts))
                 if is_visit[-1]:
                     ends = np.concatenate((ends, [len(is_visit)]))
+                # Collect per-run best trackpoint, then merge runs whose closest
+                # approaches sit within merge_threshold_m of each other in route
+                # distance (a trail kinking back across the threshold band).
+                merged = []  # list of (idx, min_distance_to_waypoint)
                 for s, e in zip(starts, ends):
-                    idx = s + int(np.argmin(d[s:e]))
+                    cand_idx = s + int(np.argmin(d[s:e]))
+                    cand_d = float(d[cand_idx])
+                    if merged and (profile.distance[cand_idx] - profile.distance[merged[-1][0]]) < merge_threshold_m:
+                        if cand_d < merged[-1][1]:
+                            merged[-1] = (cand_idx, cand_d)
+                    else:
+                        merged.append((cand_idx, cand_d))
+                for idx, _ in merged:
                     wp_dist = float(distance[idx])
                     label = f"{name} ({wp_dist:.2f} {dist_unit})"
                     waypoint_marks.append((wp_dist, label))

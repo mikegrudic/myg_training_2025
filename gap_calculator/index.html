@@ -87,6 +87,10 @@ Note that the grade-adjustment model (the same as used by Strava) is calibrated 
     <input type="checkbox" id="reverse" disabled>
   </div>
   <div class="control-row">
+    <label for="step-averages">Step-plot per-unit averages (effort, pace, vspeed):</label>
+    <input type="checkbox" id="step-averages" disabled>
+  </div>
+  <div class="control-row">
     <label for="splits-mode">Splits:</label>
     <select id="splits-mode" disabled>
       <option value="distance" selected>Distance only</option>
@@ -149,7 +153,7 @@ def _pace_tick(min_per_mi, _pos):
         return ""
     return _format_clock(min_per_mi * 60)
 
-_state = {"bytes": None, "smoothing": 30.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "split_pct": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False}
+_state = {"bytes": None, "smoothing": 30.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "split_pct": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False, "step_averages": False}
 
 M_TO_MI = 0.0006213711922
 M_TO_FT = 3.280839895
@@ -191,6 +195,9 @@ def set_show_gpx_pace(flag):
 
 def set_reverse(flag):
     _state["reverse"] = bool(flag)
+
+def set_step_averages(flag):
+    _state["step_averages"] = bool(flag)
 
 def _total_effort_mi(profile, distance_mi):
     avg_factor = 0.5 * (profile.gap_factor[:-1] + profile.gap_factor[1:])
@@ -328,7 +335,7 @@ def render():
     pace_min_per_unit_series = np.gradient(split_minutes, distance)
     vspeed_per_h = np.gradient(elevation, split_hours)
 
-    fig, axes = plt.subplots(3, 2, figsize=(14, 10), sharex="all")
+    fig, axes = plt.subplots(3, 2, figsize=(12, 16), sharex="all")
     ax_elev = axes[0, 0]
     ax_grade = axes[0, 1]
     ax_gap = axes[1, 0]
@@ -343,34 +350,118 @@ def render():
     ax_grade.axhline(0, color="k", lw=0.3)
     ax_grade.set_ylabel("Grade (%)")
 
-    ax_gap.plot(distance, profile.gap_factor, lw=0.7, color="black")
+    # Per-unit step-average bin edges, used for the effort/pace/vspeed panels
+    # when step-average mode is on.
+    finish_unit_for_bins = float(distance[-1])
+    bin_edges = [0.0] + [float(m) for m in range(1, int(np.floor(finish_unit_for_bins)) + 1)]
+    if bin_edges[-1] < finish_unit_for_bins - 1e-3:
+        bin_edges.append(finish_unit_for_bins)
+    bin_edges = np.array(bin_edges)
+
+    def _bin_avg_dist_weighted(series, ref_distance, edges):
+        avgs = np.empty(len(edges) - 1)
+        for i, (a, b) in enumerate(zip(edges[:-1], edges[1:])):
+            mask = (ref_distance > a) & (ref_distance < b)
+            d_seg = np.concatenate(([a], ref_distance[mask], [b]))
+            s_seg = np.concatenate(([np.interp(a, ref_distance, series)], series[mask], [np.interp(b, ref_distance, series)]))
+            if b > a:
+                trap = 0.5 * float(np.sum((s_seg[1:] + s_seg[:-1]) * np.diff(d_seg)))
+                avgs[i] = trap / (b - a)
+            else:
+                avgs[i] = np.nan
+        return avgs
+
+    def _bin_avg_rate(numerator, denominator, ref_distance, edges):
+        """Return per-bin avg = Δnumerator / Δdenominator (e.g., elevation per hour)."""
+        avgs = np.empty(len(edges) - 1)
+        for i, (a, b) in enumerate(zip(edges[:-1], edges[1:])):
+            n_a = np.interp(a, ref_distance, numerator)
+            n_b = np.interp(b, ref_distance, numerator)
+            d_a = np.interp(a, ref_distance, denominator)
+            d_b = np.interp(b, ref_distance, denominator)
+            avgs[i] = (n_b - n_a) / (d_b - d_a) if (d_b - d_a) != 0 else np.nan
+        return avgs
+
+    step_mode = _state["step_averages"]
+
+    if step_mode:
+        gap_bin = _bin_avg_dist_weighted(profile.gap_factor, distance, bin_edges)
+        ax_gap.stairs(gap_bin, bin_edges, color="black", lw=0.9)
+    else:
+        ax_gap.plot(distance, profile.gap_factor, lw=0.7, color="black")
     ax_gap.axhline(1, color="k", lw=0.3)
     ax_gap.set_ylabel(f"Relative effort per {dist_unit}")
 
-    ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color="black", label="model")
+    # Build resampled (1-min) GPX series shared across the pace / ET / vspeed
+    # overlays if time data is present and the toggle is on.
+    gpx_overlay = None  # dict or None
     if _state["show_gpx_pace"] and np.any(np.isfinite(profile.time_seconds)):
         valid = np.isfinite(profile.time_seconds)
         t_valid = profile.time_seconds[valid]
         d_valid = distance[valid]
+        z_valid = elevation[valid]
         if t_valid[-1] > t_valid[0]:
             t_grid = np.arange(t_valid[0], t_valid[-1], 60.0)
             d_grid = np.interp(t_grid, t_valid, d_valid)
-            gpx_pace = np.gradient(t_grid / 60.0, d_grid)
-            ax_pace.plot(d_grid, gpx_pace, lw=0.8, color="red", alpha=0.5, label="from GPX")
-            ax_pace.legend(loc="best", fontsize=8)
+            z_grid = np.interp(t_grid, t_valid, z_valid)
+            gpx_overlay = {
+                "t_h_raw": t_valid / 3600.0,
+                "d_raw": d_valid,
+                "z_raw": z_valid,
+                "pace": np.gradient(t_grid / 60.0, d_grid),
+                "vspeed": np.gradient(z_grid, t_grid / 3600.0),
+                "d_grid": d_grid,
+            }
+
+    if step_mode:
+        pace_bin = _bin_avg_rate(split_minutes, distance, distance, bin_edges)
+        ax_pace.stairs(pace_bin, bin_edges, color="black", lw=0.9, label="model")
+    else:
+        ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color="black", label="model")
+    if gpx_overlay is not None:
+        if step_mode:
+            gpx_distance_for_bins = gpx_overlay["d_raw"]
+            gpx_time_min_for_bins = gpx_overlay["t_h_raw"] * 60.0
+            gpx_pace_bin = _bin_avg_rate(gpx_time_min_for_bins, gpx_distance_for_bins, gpx_distance_for_bins, bin_edges)
+            ax_pace.stairs(gpx_pace_bin, bin_edges, color="red", alpha=0.5, lw=0.9, label="from GPX")
+        else:
+            ax_pace.plot(gpx_overlay["d_grid"], gpx_overlay["pace"], lw=0.8, color="red", alpha=0.5, label="from GPX")
+        ax_pace.legend(loc="best", fontsize=8)
     ax_pace.set_yscale("log")
     ax_pace.invert_yaxis()
     ax_pace.set_ylabel(f"Pace (min:sec/{dist_unit})")
     ax_pace.yaxis.set_major_locator(FixedLocator(pace_ticks))
     ax_pace.yaxis.set_minor_locator(NullLocator())
     ax_pace.yaxis.set_major_formatter(FuncFormatter(_pace_tick))
+    # Cap slow end of pace plot at 1 h / unit so noisy GPX/model spikes don't
+    # blow up the log range.
+    pace_bottom = ax_pace.get_ylim()[0]
+    ax_pace.set_ylim(bottom=min(60.0, pace_bottom))
 
-    ax_split.plot(distance, split_hours, lw=1, color="black")
+    ax_split.plot(distance, split_hours, lw=1, color="black", label="model")
+    if gpx_overlay is not None:
+        ax_split.plot(gpx_overlay["d_raw"], gpx_overlay["t_h_raw"], lw=0.8, color="red", alpha=0.5, label="from GPX")
+        ax_split.legend(loc="best", fontsize=8)
     ax_split.set_ylabel("Elapsed time (h)")
 
-    ax_vspeed.plot(distance, vspeed_per_h, lw=0.7, color="black")
+    if step_mode:
+        vspeed_bin = _bin_avg_rate(elevation, split_hours, distance, bin_edges)
+        ax_vspeed.stairs(vspeed_bin, bin_edges, color="black", lw=0.9, label="model")
+    else:
+        ax_vspeed.plot(distance, vspeed_per_h, lw=0.7, color="black", label="model")
+    if gpx_overlay is not None:
+        if step_mode:
+            gpx_vspeed_bin = _bin_avg_rate(gpx_overlay["z_raw"], gpx_overlay["t_h_raw"], gpx_overlay["d_raw"], bin_edges)
+            ax_vspeed.stairs(gpx_vspeed_bin, bin_edges, color="red", alpha=0.5, lw=0.9, label="from GPX")
+        else:
+            ax_vspeed.plot(gpx_overlay["d_grid"], gpx_overlay["vspeed"], lw=0.7, color="red", alpha=0.5, label="from GPX")
+        ax_vspeed.legend(loc="best", fontsize=8)
     ax_vspeed.axhline(0, color="k", lw=0.3)
     ax_vspeed.set_ylabel(f"Vertical speed ({vert_unit}/h)")
+    # Cap visible range to +/- 10 000 ft/h (or metric equivalent ~3000 m/h).
+    vspeed_cap = 3048.0 if metric else 10000.0
+    vs_bot, vs_top = ax_vspeed.get_ylim()
+    ax_vspeed.set_ylim(max(vs_bot, -vspeed_cap), min(vs_top, vspeed_cap))
 
     for ax in (ax_elev, ax_grade, ax_gap, ax_pace, ax_split, ax_vspeed):
         ax.xaxis.set_major_locator(MaxNLocator(nbins=20, steps=[1, 2, 5, 10]))
@@ -378,6 +469,7 @@ def render():
         ax.set_xlabel(f"Distance ({dist_unit})")
         ax.tick_params(labelbottom=True)
         ax.grid(alpha=0.3)
+        ax.set_box_aspect(1.0)
 
     fig.tight_layout()
 
@@ -589,6 +681,7 @@ def render():
   document.getElementById("gap-model").disabled = false;
   document.getElementById("show-gpx-pace").disabled = false;
   document.getElementById("reverse").disabled = false;
+  document.getElementById("step-averages").disabled = false;
 }
 
 function distConv() {
@@ -785,6 +878,11 @@ function bindEvents() {
 
   document.getElementById("show-gpx-pace").addEventListener("change", (e) => {
     pyodide.globals.get("set_show_gpx_pace")(e.target.checked);
+    scheduleRender();
+  });
+
+  document.getElementById("step-averages").addEventListener("change", (e) => {
+    pyodide.globals.get("set_step_averages")(e.target.checked);
     scheduleRender();
   });
 

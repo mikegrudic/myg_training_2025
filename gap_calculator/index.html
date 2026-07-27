@@ -4,26 +4,28 @@
 <meta charset="UTF-8">
 <title>GPX Elevation Profile</title>
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; max-width: 1400px; margin: 2em auto; padding: 0 1em; }
+  :root { color-scheme: dark; }
+  body { font-family: -apple-system, system-ui, sans-serif; max-width: 1400px; margin: 2em auto; padding: 0 1em; background: #1e1e1e; color: #e0e0e0; }
+  a { color: #6db3f2; }
   h1 { margin-bottom: 0.2em; }
   .controls { display: flex; flex-direction: column; gap: 0.8em; margin: 1em 0; }
   .control-row { display: flex; align-items: center; gap: 0.8em; flex-wrap: wrap; }
   .control-row label { min-width: 12em; }
   input[type="range"] { flex: 1; min-width: 200px; }
-  #status { color: #666; font-style: italic; min-height: 1.2em; }
-  .metrics { display: flex; flex-wrap: wrap; gap: 1.5em; margin: 1em 0; padding: 0.6em 1em; background: #f4f4f4; border-radius: 6px; }
+  #status { color: #999; font-style: italic; min-height: 1.2em; }
+  .metrics { display: flex; flex-wrap: wrap; gap: 1.5em; margin: 1em 0; padding: 0.6em 1em; background: #2a2a2a; border-radius: 6px; }
   .metrics span { font-size: 0.95em; }
-  .metrics strong { display: block; font-size: 1.2em; color: #222; }
+  .metrics strong { display: block; font-size: 1.2em; color: #fff; }
   #plot img { max-width: 100%; height: auto; display: block; }
   .results-row { display: flex; gap: 1.5em; align-items: flex-start; flex-wrap: wrap; }
   .results-plot { flex: 1 1 700px; min-width: 0; }
   .results-splits { flex: 0 1 auto; }
   .results-splits h2 { margin-top: 0; }
   table.splits { border-collapse: collapse; margin: 0 0 1em 0; font-variant-numeric: tabular-nums; }
-  table.splits th, table.splits td { padding: 0.3em 0.9em; text-align: right; border-bottom: 1px solid #ddd; }
-  table.splits th { background: #f4f4f4; }
+  table.splits th, table.splits td { padding: 0.3em 0.9em; text-align: right; border-bottom: 1px solid #444; }
+  table.splits th { background: #2a2a2a; }
   table.splits td:first-child, table.splits th:first-child { text-align: left; }
-  table.splits tr.waypoint { background: #fff7d6; font-style: italic; }
+  table.splits tr.waypoint { background: #3a3520; font-style: italic; }
 </style>
 <script src="https://cdn.jsdelivr.net/pyodide/v0.26.4/full/pyodide.js"></script>
 </head>
@@ -77,6 +79,10 @@ Note that the grade-adjustment model (the same as used by Strava) is calibrated 
       <option value="strava" selected>Strava</option>
       <option value="minetti">Minetti 2002</option>
     </select>
+  </div>
+  <div class="control-row">
+    <label for="gap-bias">Uphill/downhill effort bias (Δeffort per % grade): <span id="gap-bias-val">0.000</span></label>
+    <input type="range" id="gap-bias" min="-0.05" max="0.05" value="0" step="0.001" disabled>
   </div>
   <div class="control-row">
     <label for="show-gpx-pace">Overplot pace from GPX (if available):</label>
@@ -138,6 +144,25 @@ from matplotlib import pyplot as plt
 from matplotlib.ticker import FuncFormatter, MaxNLocator, FixedLocator, NullLocator
 from elevation_profile import ElevationProfile, parse_waypoints, _haversine
 
+# Dark theme for all plots
+_BG = "#1e1e1e"
+_FG = "#e0e0e0"
+_AXLINE = "#888888"
+plt.rcParams.update({
+    "figure.facecolor": _BG,
+    "axes.facecolor": _BG,
+    "savefig.facecolor": _BG,
+    "text.color": _FG,
+    "axes.labelcolor": _FG,
+    "axes.edgecolor": _AXLINE,
+    "axes.titlecolor": _FG,
+    "xtick.color": _FG,
+    "ytick.color": _FG,
+    "grid.color": "#555555",
+    "legend.facecolor": "#2a2a2a",
+    "legend.edgecolor": _AXLINE,
+})
+
 
 def _format_clock(total_seconds):
     total_seconds = max(0, int(round(total_seconds)))
@@ -153,7 +178,7 @@ def _pace_tick(min_per_mi, _pos):
         return ""
     return _format_clock(min_per_mi * 60)
 
-_state = {"bytes": None, "smoothing": 30.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "split_pct": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False, "step_averages": False}
+_state = {"bytes": None, "smoothing": 30.0, "total_time_minutes": 120.0, "fatigue_rate_per_hour": 0.0, "split_pct": 0.0, "show_derived_gap": False, "units": "imperial", "splits_mode": "distance", "gap_model": "strava", "show_gpx_pace": False, "reverse": False, "step_averages": False, "gap_bias_slope": 0.0}
 
 M_TO_MI = 0.0006213711922
 M_TO_FT = 3.280839895
@@ -162,6 +187,9 @@ M_PER_FT = 0.3048
 
 def set_bytes(b):
     _state["bytes"] = bytes(b)
+
+def clear_bytes():
+    _state["bytes"] = None
 
 def set_smoothing(s):
     _state["smoothing"] = float(s)
@@ -199,6 +227,16 @@ def set_reverse(flag):
 def set_step_averages(flag):
     _state["step_averages"] = bool(flag)
 
+def set_gap_bias(slope):
+    _state["gap_bias_slope"] = float(slope)
+
+def _apply_gap_bias(profile):
+    slope = _state["gap_bias_slope"]
+    if slope == 0.0:
+        return profile
+    profile.gap_factor = np.maximum(0.01, profile.gap_factor + slope * profile.grade)
+    return profile
+
 def _total_effort_mi(profile, distance_mi):
     avg_factor = 0.5 * (profile.gap_factor[:-1] + profile.gap_factor[1:])
     return float(np.sum(avg_factor * np.diff(distance_mi)))
@@ -235,12 +273,12 @@ def default_initial_time_minutes():
     GAP-adjusted distance. Returns None if no GPX is loaded."""
     if _state["bytes"] is None:
         return None
-    profile = ElevationProfile.from_gpx(
+    profile = _apply_gap_bias(ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
         reverse=_state["reverse"],
-    )
+    ))
     distance_mi = profile.distance * M_TO_MI
     effort = _total_effort_mi(profile, distance_mi)
     wr_pace = _world_record_pace_min_per_mi(effort)
@@ -251,12 +289,12 @@ def total_effort_mi_current():
     smoothing setting. Returns None if no GPX has been loaded."""
     if _state["bytes"] is None:
         return None
-    profile = ElevationProfile.from_gpx(
+    profile = _apply_gap_bias(ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
         reverse=_state["reverse"],
-    )
+    ))
     distance_mi = profile.distance * M_TO_MI
     return _total_effort_mi(profile, distance_mi)
 
@@ -289,12 +327,12 @@ def gpx_total_time_minutes():
 def render():
     if _state["bytes"] is None:
         return ""
-    profile = ElevationProfile.from_gpx(
+    profile = _apply_gap_bias(ElevationProfile.from_gpx(
         io.BytesIO(_state["bytes"]),
         smoothing_length=_state["smoothing"],
         model=_state["gap_model"],
         reverse=_state["reverse"],
-    )
+    ))
 
     metric = _state["units"] == "metric"
     if metric:
@@ -343,11 +381,11 @@ def render():
     ax_split = axes[2, 0]
     ax_vspeed = axes[2, 1]
 
-    ax_elev.plot(distance, elevation, lw=1, color="black")
+    ax_elev.plot(distance, elevation, lw=1, color=_FG)
     ax_elev.set_ylabel(f"Elevation ({vert_unit})")
 
-    ax_grade.plot(distance, profile.grade, lw=0.7, color="black")
-    ax_grade.axhline(0, color="k", lw=0.3)
+    ax_grade.plot(distance, profile.grade, lw=0.7, color=_FG)
+    ax_grade.axhline(0, color=_AXLINE, lw=0.3)
     ax_grade.set_ylabel("Grade (%)")
 
     # Per-unit step-average bin edges, used for the effort/pace/vspeed panels
@@ -386,10 +424,10 @@ def render():
 
     if step_mode:
         gap_bin = _bin_avg_dist_weighted(profile.gap_factor, distance, bin_edges)
-        ax_gap.stairs(gap_bin, bin_edges, color="black", lw=0.9)
+        ax_gap.stairs(gap_bin, bin_edges, color=_FG, lw=0.9)
     else:
-        ax_gap.plot(distance, profile.gap_factor, lw=0.7, color="black")
-    ax_gap.axhline(1, color="k", lw=0.3)
+        ax_gap.plot(distance, profile.gap_factor, lw=0.7, color=_FG)
+    ax_gap.axhline(1, color=_AXLINE, lw=0.3)
     ax_gap.set_ylabel(f"Relative effort per {dist_unit}")
 
     # Build resampled (1-min) GPX series shared across the pace / ET / vspeed
@@ -415,17 +453,17 @@ def render():
 
     if step_mode:
         pace_bin = _bin_avg_rate(split_minutes, distance, distance, bin_edges)
-        ax_pace.stairs(pace_bin, bin_edges, color="black", lw=0.9, label="model")
+        ax_pace.stairs(pace_bin, bin_edges, color=_FG, lw=0.9, label="model")
     else:
-        ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color="black", label="model")
+        ax_pace.plot(distance, pace_min_per_unit_series, lw=0.8, color=_FG, label="model")
     if gpx_overlay is not None:
         if step_mode:
             gpx_distance_for_bins = gpx_overlay["d_raw"]
             gpx_time_min_for_bins = gpx_overlay["t_h_raw"] * 60.0
             gpx_pace_bin = _bin_avg_rate(gpx_time_min_for_bins, gpx_distance_for_bins, gpx_distance_for_bins, bin_edges)
-            ax_pace.stairs(gpx_pace_bin, bin_edges, color="red", alpha=0.5, lw=0.9, label="from GPX")
+            ax_pace.stairs(gpx_pace_bin, bin_edges, color="#ff6b6b", alpha=0.7, lw=0.9, label="from GPX")
         else:
-            ax_pace.plot(gpx_overlay["d_grid"], gpx_overlay["pace"], lw=0.8, color="red", alpha=0.5, label="from GPX")
+            ax_pace.plot(gpx_overlay["d_grid"], gpx_overlay["pace"], lw=0.8, color="#ff6b6b", alpha=0.7, label="from GPX")
         ax_pace.legend(loc="best", fontsize=8)
     ax_pace.set_yscale("log")
     ax_pace.invert_yaxis()
@@ -438,25 +476,25 @@ def render():
     pace_bottom = ax_pace.get_ylim()[0]
     ax_pace.set_ylim(bottom=min(60.0, pace_bottom))
 
-    ax_split.plot(distance, split_hours, lw=1, color="black", label="model")
+    ax_split.plot(distance, split_hours, lw=1, color=_FG, label="model")
     if gpx_overlay is not None:
-        ax_split.plot(gpx_overlay["d_raw"], gpx_overlay["t_h_raw"], lw=0.8, color="red", alpha=0.5, label="from GPX")
+        ax_split.plot(gpx_overlay["d_raw"], gpx_overlay["t_h_raw"], lw=0.8, color="#ff6b6b", alpha=0.7, label="from GPX")
         ax_split.legend(loc="best", fontsize=8)
     ax_split.set_ylabel("Elapsed time (h)")
 
     if step_mode:
         vspeed_bin = _bin_avg_rate(elevation, split_hours, distance, bin_edges)
-        ax_vspeed.stairs(vspeed_bin, bin_edges, color="black", lw=0.9, label="model")
+        ax_vspeed.stairs(vspeed_bin, bin_edges, color=_FG, lw=0.9, label="model")
     else:
-        ax_vspeed.plot(distance, vspeed_per_h, lw=0.7, color="black", label="model")
+        ax_vspeed.plot(distance, vspeed_per_h, lw=0.7, color=_FG, label="model")
     if gpx_overlay is not None:
         if step_mode:
             gpx_vspeed_bin = _bin_avg_rate(gpx_overlay["z_raw"], gpx_overlay["t_h_raw"], gpx_overlay["d_raw"], bin_edges)
-            ax_vspeed.stairs(gpx_vspeed_bin, bin_edges, color="red", alpha=0.5, lw=0.9, label="from GPX")
+            ax_vspeed.stairs(gpx_vspeed_bin, bin_edges, color="#ff6b6b", alpha=0.7, lw=0.9, label="from GPX")
         else:
-            ax_vspeed.plot(gpx_overlay["d_grid"], gpx_overlay["vspeed"], lw=0.7, color="red", alpha=0.5, label="from GPX")
+            ax_vspeed.plot(gpx_overlay["d_grid"], gpx_overlay["vspeed"], lw=0.7, color="#ff6b6b", alpha=0.7, label="from GPX")
         ax_vspeed.legend(loc="best", fontsize=8)
-    ax_vspeed.axhline(0, color="k", lw=0.3)
+    ax_vspeed.axhline(0, color=_AXLINE, lw=0.3)
     ax_vspeed.set_ylabel(f"Vertical speed ({vert_unit}/h)")
     # Cap visible range to +/- 10 000 ft/h (or metric equivalent ~3000 m/h).
     vspeed_cap = 3048.0 if metric else 10000.0
@@ -679,6 +717,7 @@ def render():
   document.getElementById("units").disabled = false;
   document.getElementById("splits-mode").disabled = false;
   document.getElementById("gap-model").disabled = false;
+  document.getElementById("gap-bias").disabled = false;
   document.getElementById("show-gpx-pace").disabled = false;
   document.getElementById("reverse").disabled = false;
   document.getElementById("step-averages").disabled = false;
@@ -733,32 +772,43 @@ function setStatus(msg) {
 }
 
 function ingestGpxBytes(arrayBuf, overrides = {}) {
-  pyodide.globals.get("set_bytes")(new Uint8Array(arrayBuf));
-  if (overrides.splitsMode) {
-    pyodide.globals.get("set_splits_mode")(overrides.splitsMode);
-    document.getElementById("splits-mode").value = overrides.splitsMode;
-  }
-  let defaultMin;
-  if (overrides.totalMinutes !== undefined) {
-    defaultMin = overrides.totalMinutes;
-  } else {
-    const gpxMin = pyodide.globals.get("gpx_total_time_minutes")();
-    defaultMin = gpxMin ?? pyodide.globals.get("default_initial_time_minutes")();
-  }
-  if (defaultMin !== null) {
-    document.getElementById("time").value = formatHMS(defaultMin);
-    const dc = distConv();
-    const totalEffort = pyodide.globals.get("total_effort_mi_current")();
-    if (totalEffort !== null && totalEffort > 0) {
-      document.getElementById("gap").value = formatMS(defaultMin / (totalEffort * dc));
+  try {
+    pyodide.globals.get("set_bytes")(new Uint8Array(arrayBuf));
+    if (overrides.splitsMode) {
+      pyodide.globals.get("set_splits_mode")(overrides.splitsMode);
+      document.getElementById("splits-mode").value = overrides.splitsMode;
     }
-    const totalDist = pyodide.globals.get("total_distance_mi_current")();
-    if (totalDist !== null && totalDist > 0) {
-      document.getElementById("pace").value = formatMS(defaultMin / (totalDist * dc));
+    let defaultMin;
+    if (overrides.totalMinutes !== undefined) {
+      defaultMin = overrides.totalMinutes;
+    } else {
+      const gpxMin = pyodide.globals.get("gpx_total_time_minutes")();
+      defaultMin = gpxMin ?? pyodide.globals.get("default_initial_time_minutes")();
     }
-    pyodide.globals.get("set_total_time")(defaultMin);
+    if (defaultMin !== null) {
+      document.getElementById("time").value = formatHMS(defaultMin);
+      const dc = distConv();
+      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+      if (totalEffort !== null && totalEffort > 0) {
+        document.getElementById("gap").value = formatMS(defaultMin / (totalEffort * dc));
+      }
+      const totalDist = pyodide.globals.get("total_distance_mi_current")();
+      if (totalDist !== null && totalDist > 0) {
+        document.getElementById("pace").value = formatMS(defaultMin / (totalDist * dc));
+      }
+      pyodide.globals.get("set_total_time")(defaultMin);
+    }
+    scheduleRender();
+  } catch (e) {
+    pyodide.globals.get("clear_bytes")();
+    const msg = e.message || String(e);
+    if (msg.includes("fewer than 2 track points with elevation")) {
+      setStatus("Error: GPX file has no elevation data. Export your route with elevation included (e.g. from Caltopo: Actions → Export → GPX with elevation).");
+    } else {
+      setStatus("Error loading GPX: " + msg);
+    }
+    console.error(e);
   }
-  scheduleRender();
 }
 
 function bindEvents() {
@@ -901,6 +951,24 @@ function bindEvents() {
 
   document.getElementById("gap-model").addEventListener("change", (e) => {
     pyodide.globals.get("set_gap_model")(e.target.value);
+    const totalMin = parseHMS(timeInput.value);
+    if (totalMin !== null) {
+      const dc = distConv();
+      const totalEffort = pyodide.globals.get("total_effort_mi_current")();
+      if (totalEffort !== null && totalEffort > 0) {
+        gapInput.value = formatMS(totalMin / (totalEffort * dc));
+      }
+    }
+    scheduleRender();
+  });
+
+  const biasSlider = document.getElementById("gap-bias");
+  const biasVal = document.getElementById("gap-bias-val");
+  biasSlider.addEventListener("input", () => {
+    biasVal.textContent = parseFloat(biasSlider.value).toFixed(3);
+  });
+  biasSlider.addEventListener("change", () => {
+    pyodide.globals.get("set_gap_bias")(parseFloat(biasSlider.value));
     const totalMin = parseHMS(timeInput.value);
     if (totalMin !== null) {
       const dc = distConv();

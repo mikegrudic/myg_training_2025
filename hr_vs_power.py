@@ -1,38 +1,40 @@
 from fitfile_parsing import fitfile_to_data
 from garmin_sync import sync_rides
 from glob import glob
+import os
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib.lines import Line2D
 from datetime import datetime
 from palettable.cmocean.sequential import Haline_4_r
 from scipy.optimize import least_squares
 
 cmap = plt.get_cmap("rainbow_r")
-CMAP_MONTHS = 8
+CMAP_MONTHS = 12
 
 
 def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
-    rides = glob("rides/*.fit")
+    rides = sorted(glob("rides/*.fit") + glob("rides/heat/*.fit"), key=os.path.basename)
     fig, ax = plt.subplots()
     t0 = datetime(2025, 11, 3).date()
     ts = []
     mean_hrs = []
     mean_powers = []
-    for i, f in enumerate(reversed(sorted(rides))):
-        #        print(f)
+    today_found = False
+    heat_found = False
+    cadence_found = False
+    for i, f in enumerate(reversed(rides)):
+        is_heat = "/heat/" in f
         values, _ = fitfile_to_data(f, smoothing_seconds=3.0, seconds_tocut=300)
 
         distances = values["distance"]
         altitude = values["enhanced_altitude"]
         heartrates = values["heart_rate"]
         power = values["power"]
+        cadence = values.get("cadence")
         timestamps = values["timestamp"]
         dt = timestamps[-1].date() - t0
         ride_is_today = timestamps[-1].date() == datetime.today().date() and i == 0
-        #        print(f, ride_is_today, timestamps[-1].date())
-        # minutes_start = 10
-        # minutes_end = 40
-        # avg_label = f"({minutes_start}-{minutes_end} min)"
 
         # find the most powerful 30min
         dt_window = time_minutes * 60
@@ -44,19 +46,46 @@ def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
         hr_avg = (hrsum[dt_window:] - hrsum[:-dt_window]) / dt_window
         efficiency_avg = power_avg / hr_avg
         if most_efficient:
-            power_mean = power_avg[efficiency_avg.argmax()]
-            hr_mean = hr_avg[efficiency_avg.argmax()]
+            sel_idx = int(efficiency_avg.argmax())
         else:
-            power_mean = power_avg.max()
-            hr_mean = hr_avg[power_avg.argmax()]
+            sel_idx = int(power_avg.argmax())
+        power_mean = power_avg[sel_idx]
+        hr_mean = hr_avg[sel_idx]
+
+        high_cadence = False
+        if cadence is not None and len(cadence) >= sel_idx + dt_window:
+            cad_window = np.asarray(cadence[sel_idx : sel_idx + dt_window], dtype=float)
+            valid = np.isfinite(cad_window)
+            if np.any(valid):
+                high_cadence = float(np.mean(cad_window[valid])) >= 80.0
+
+        if ride_is_today:
+            marker = "*"
+            size = 60
+            edgec = "black"
+            today_found = True
+        elif is_heat:
+            marker = "v"
+            size = 30
+            edgec = "red"
+            heat_found = True
+        elif high_cadence:
+            marker = "D"
+            size = 25
+            edgec = "blue"
+            cadence_found = True
+        else:
+            marker = "s"
+            size = 20
+            edgec = None
 
         ax.scatter(
             [hr_mean],
             [power_mean],
             lw=0.5,
-            marker=("*" if ride_is_today else "s"),
-            s=(60 if ride_is_today else 20),
-            edgecolor=("black" if ride_is_today else None),
+            marker=marker,
+            s=size,
+            edgecolor=edgec,
             color=cmap(dt.days / 30 / CMAP_MONTHS),
             zorder=dt.days,
             alpha=1,
@@ -100,6 +129,25 @@ def make_hr_vs_power_plot(time_minutes: float, most_efficient=False):
     #         ls="dotted",
     #     )
 
+    legend_handles = []
+    if today_found:
+        legend_handles.append(
+            Line2D([0], [0], marker="*", linestyle="", markersize=10,
+                   markerfacecolor="lightgray", markeredgecolor="black", label="Today")
+        )
+    if heat_found:
+        legend_handles.append(
+            Line2D([0], [0], marker="v", linestyle="", markersize=8,
+                   markerfacecolor="lightgray", markeredgecolor="red", label="Heat")
+        )
+    if cadence_found:
+        legend_handles.append(
+            Line2D([0], [0], marker="D", linestyle="", markersize=7,
+                   markerfacecolor="lightgray", markeredgecolor="blue", label="High Cadence")
+        )
+    if legend_handles:
+        ax.legend(handles=legend_handles, loc="upper left")
+
     plt.tight_layout()
     plt.savefig(f"heartrate_vs_power_{time_minutes}.pdf", bbox_inches="tight")
 
@@ -111,7 +159,7 @@ def main():
         sync_rides()
     except Exception as e:
         print(f"Skipping Garmin sync: {e}")
-    for m in 5, 10, 20, 30, 45, 60:
+    for m in 3, 5, 10, 20, 30, 45, 60:
         make_hr_vs_power_plot(m, most_efficient=True)
 
 

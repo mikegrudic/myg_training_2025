@@ -373,13 +373,59 @@ def render():
     pace_min_per_unit_series = np.gradient(split_minutes, distance)
     vspeed_per_h = np.gradient(elevation, split_hours)
 
-    fig, axes = plt.subplots(3, 2, figsize=(12, 16), sharex="all")
+    # Build a dense GPX pace / vertical-speed overlay if time data is present
+    # and the toggle is on. Sample on a dense time grid but derive each value
+    # from a centered finite difference over a fixed time window, so 1 Hz GPS
+    # jitter doesn't swamp the signal (density and smoothing decoupled).
+    gpx_overlay = None  # dict or None
+    if _state["show_gpx_pace"] and np.any(np.isfinite(profile.time_seconds)):
+        valid = np.isfinite(profile.time_seconds)
+        t_valid = profile.time_seconds[valid]
+        d_valid = distance[valid]
+        z_valid = elevation[valid]
+        if t_valid[-1] > t_valid[0]:
+            GRID_DT = 5.0        # grid spacing (s)
+            HALF_WINDOW = 30.0   # centered-difference half-window (s)
+            t_grid = np.arange(t_valid[0], t_valid[-1] + GRID_DT, GRID_DT)
+            t_lo = np.clip(t_grid - HALF_WINDOW, t_valid[0], t_valid[-1])
+            t_hi = np.clip(t_grid + HALF_WINDOW, t_valid[0], t_valid[-1])
+            d_lo = np.interp(t_lo, t_valid, d_valid)
+            d_hi = np.interp(t_hi, t_valid, d_valid)
+            z_lo = np.interp(t_lo, t_valid, z_valid)
+            z_hi = np.interp(t_hi, t_valid, z_valid)
+            dd = d_hi - d_lo
+            dt_min = (t_hi - t_lo) / 60.0
+            dt_h = (t_hi - t_lo) / 3600.0
+            with np.errstate(divide="ignore", invalid="ignore"):
+                pace = np.where(dd > 0, dt_min / dd, np.nan)
+                vspeed = np.where(dt_h > 0, (z_hi - z_lo) / dt_h, np.nan)
+            gpx_overlay = {
+                "t_h_raw": t_valid / 3600.0,
+                "d_raw": d_valid,
+                "z_raw": z_valid,
+                "pace": pace,
+                "vspeed": vspeed,
+                "d_grid": np.interp(t_grid, t_valid, d_valid),
+            }
+
+    # The GAP panel only earns its space when it has something non-flat to
+    # show: a real pacing strategy (fatigue / split warps the model GAP) or
+    # actual GPX pace data to overlay. Otherwise drop it and its whole row.
+    show_gap_panel = gpx_overlay is not None or effective_fatigue != 0.0
+    nrows = 4 if show_gap_panel else 3
+
+    fig, axes = plt.subplots(nrows, 2, figsize=(12, 5.25 * nrows), sharex="all")
     ax_elev = axes[0, 0]
     ax_grade = axes[0, 1]
     ax_gap = axes[1, 0]
     ax_pace = axes[1, 1]
     ax_split = axes[2, 0]
     ax_vspeed = axes[2, 1]
+    if show_gap_panel:
+        ax_gappace = axes[3, 0]
+        axes[3, 1].set_visible(False)
+    else:
+        ax_gappace = None
 
     ax_elev.plot(distance, elevation, lw=1, color=_FG)
     ax_elev.set_ylabel(f"Elevation ({vert_unit})")
@@ -429,27 +475,6 @@ def render():
         ax_gap.plot(distance, profile.gap_factor, lw=0.7, color=_FG)
     ax_gap.axhline(1, color=_AXLINE, lw=0.3)
     ax_gap.set_ylabel(f"Relative effort per {dist_unit}")
-
-    # Build resampled (1-min) GPX series shared across the pace / ET / vspeed
-    # overlays if time data is present and the toggle is on.
-    gpx_overlay = None  # dict or None
-    if _state["show_gpx_pace"] and np.any(np.isfinite(profile.time_seconds)):
-        valid = np.isfinite(profile.time_seconds)
-        t_valid = profile.time_seconds[valid]
-        d_valid = distance[valid]
-        z_valid = elevation[valid]
-        if t_valid[-1] > t_valid[0]:
-            t_grid = np.arange(t_valid[0], t_valid[-1], 60.0)
-            d_grid = np.interp(t_grid, t_valid, d_valid)
-            z_grid = np.interp(t_grid, t_valid, z_valid)
-            gpx_overlay = {
-                "t_h_raw": t_valid / 3600.0,
-                "d_raw": d_valid,
-                "z_raw": z_valid,
-                "pace": np.gradient(t_grid / 60.0, d_grid),
-                "vspeed": np.gradient(z_grid, t_grid / 3600.0),
-                "d_grid": d_grid,
-            }
 
     if step_mode:
         pace_bin = _bin_avg_rate(split_minutes, distance, distance, bin_edges)
@@ -501,7 +526,40 @@ def render():
     vs_bot, vs_top = ax_vspeed.get_ylim()
     ax_vspeed.set_ylim(max(vs_bot, -vspeed_cap), min(vs_top, vspeed_cap))
 
-    for ax in (ax_elev, ax_grade, ax_gap, ax_pace, ax_split, ax_vspeed):
+    # Grade-adjusted pace (GAP): local pace / grade factor. Flat for the
+    # constant-GAP model unless a fatigue / split strategy warps it with
+    # elapsed time; for GPX pace data it reveals how evenly the effort was
+    # actually paced (surges show as faster GAP, fades as slower). Only drawn
+    # when non-flat — see show_gap_panel above.
+    if ax_gappace is not None:
+        gap_pace_series = pace_min_per_unit_series / profile.gap_factor
+        if step_mode:
+            model_gap_bin = _bin_avg_dist_weighted(gap_pace_series, distance, bin_edges)
+            ax_gappace.stairs(model_gap_bin, bin_edges, color=_FG, lw=0.9, label="model")
+        else:
+            ax_gappace.plot(distance, gap_pace_series, lw=0.8, color=_FG, label="model")
+        if gpx_overlay is not None:
+            gpx_gap_factor = np.interp(gpx_overlay["d_grid"], distance, profile.gap_factor)
+            gpx_gap_pace = gpx_overlay["pace"] / gpx_gap_factor
+            if step_mode:
+                gpx_gap_bin = _bin_avg_dist_weighted(gpx_gap_pace, gpx_overlay["d_grid"], bin_edges)
+                ax_gappace.stairs(gpx_gap_bin, bin_edges, color="#ff6b6b", alpha=0.7, lw=0.9, label="from GPX")
+            else:
+                ax_gappace.plot(gpx_overlay["d_grid"], gpx_gap_pace, lw=0.8, color="#ff6b6b", alpha=0.7, label="from GPX")
+            ax_gappace.legend(loc="best", fontsize=8)
+        ax_gappace.set_yscale("log")
+        ax_gappace.invert_yaxis()
+        ax_gappace.set_ylabel(f"GAP (min:sec/{dist_unit})")
+        ax_gappace.yaxis.set_major_locator(FixedLocator(pace_ticks))
+        ax_gappace.yaxis.set_minor_locator(NullLocator())
+        ax_gappace.yaxis.set_major_formatter(FuncFormatter(_pace_tick))
+        gap_pace_bottom = ax_gappace.get_ylim()[0]
+        ax_gappace.set_ylim(bottom=min(60.0, gap_pace_bottom))
+
+    plot_axes = [ax_elev, ax_grade, ax_gap, ax_pace, ax_split, ax_vspeed]
+    if ax_gappace is not None:
+        plot_axes.append(ax_gappace)
+    for ax in plot_axes:
         ax.xaxis.set_major_locator(MaxNLocator(nbins=20, steps=[1, 2, 5, 10]))
         ax.set_xlim(0, distance[-1])
         ax.set_xlabel(f"Distance ({dist_unit})")

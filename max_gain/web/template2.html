@@ -1,0 +1,546 @@
+<title>Max-Gain Trail Routes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap">
+<style>
+:root {
+  --paper: #eef1ed;
+  --surface: #fafbf9;
+  --ink: #1b2420;
+  --muted: #5a6961;
+  --rule: #d6ddd7;
+  --net: #b9c3bc;
+  --mark: #1b2420;
+  --race: #e7ebe4;
+  --c-loop: #2a78d6;
+  --c-out-and-back: #eb6834;
+  --c-lollipop: #1baf7a;
+  --c-dumbbell: #c98500;
+  --c-figure-8: #e87ba4;
+  --c-traverse: #4a3aa7;
+  --c-loop-spurs: #eb6834;
+  --gold: #b8860b;
+  --silver: #8a939b;
+  --bronze: #a8643a;
+  --focus: #2a78d6;
+  --display: "Barlow Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
+  --body: "Barlow", "Helvetica Neue", Arial, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #111614;
+    --surface: #181e1b;
+    --ink: #e6ece8;
+    --muted: #97a69e;
+    --rule: #2b3430;
+    --net: #3a4540;
+    --mark: #e6ece8;
+    --race: #1e2622;
+    --c-loop: #3987e5;
+    --c-out-and-back: #d95926;
+    --c-lollipop: #199e70;
+    --c-dumbbell: #c98500;
+    --c-figure-8: #d55181;
+    --c-traverse: #9085e9;
+  --c-loop-spurs: #d95926;
+    --c-loop-spurs: #d95926;
+    --gold: #e0b43a;
+    --silver: #b9c1c8;
+    --bronze: #cd8a5b;
+    --focus: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #111614;
+  --surface: #181e1b;
+  --ink: #e6ece8;
+  --muted: #97a69e;
+  --rule: #2b3430;
+  --net: #3a4540;
+  --mark: #e6ece8;
+  --race: #1e2622;
+  --c-loop: #3987e5;
+  --c-out-and-back: #d95926;
+  --c-lollipop: #199e70;
+  --c-dumbbell: #c98500;
+  --c-figure-8: #d55181;
+  --c-traverse: #9085e9;
+  --gold: #e0b43a;
+  --silver: #b9c1c8;
+  --bronze: #cd8a5b;
+  --focus: #3987e5;
+}
+* { box-sizing: border-box; }
+body { background: var(--paper); color: var(--ink); font: 15px/1.5 var(--body); padding: 28px 20px 48px; margin: 0; }
+.wrap { max-width: 1440px; margin: 0 auto; display: grid; gap: 24px; }
+h1, h2, .eyebrow, th, .chip, .btn, .site { font-family: var(--display); }
+.eyebrow { text-transform: uppercase; letter-spacing: .08em; font-weight: 600; color: var(--muted); font-size: 13px; margin: 0; }
+h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.02; margin: 4px 0 10px; font-weight: 700; text-wrap: balance; }
+.lede { max-width: 66ch; margin: 0; }
+.lede + .lede { margin-top: 8px; color: var(--muted); font-size: 14px; }
+.sites { display: flex; flex-wrap: wrap; gap: 8px; }
+.site {
+  appearance: none; cursor: pointer; text-align: left; border: 1px solid var(--rule); background: var(--surface); color: var(--ink);
+  border-radius: 4px; padding: 7px 12px 6px; font-size: 18px; font-weight: 700; line-height: 1.1;
+}
+.site small { display: block; font-family: var(--body); font-weight: 400; font-size: 12.5px; color: var(--muted); }
+.site[aria-pressed="true"] { border-color: var(--ink); box-shadow: inset 0 0 0 1px var(--ink); }
+.site:hover { border-color: var(--muted); }
+.top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 28px; align-items: start; }
+@media (max-width: 860px) { .top { grid-template-columns: minmax(0, 1fr); } }
+.meta { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 16px 0 0; font-size: 13.5px; }
+.meta dt { color: var(--muted); }
+.meta dd { margin: 0; font-variant-numeric: tabular-nums; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 18px; }
+.btn { appearance: none; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-size: 15px; font-weight: 600; letter-spacing: .02em; padding: 6px 14px; border-radius: 3px; cursor: pointer; }
+.btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+.btn:hover { filter: brightness(1.1); }
+.btn.ghost:hover { border-color: var(--ink); }
+.btn:focus-visible, .cell:focus-visible, .pt:focus-visible, .site:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.status { font-size: 13px; color: var(--muted); }
+figure { margin: 0; }
+.chart-card { background: var(--surface); border: 1px solid var(--rule); border-radius: 4px; padding: 14px 14px 8px; }
+.chart-card h2 { font-size: 18px; margin: 0 0 2px; font-weight: 600; }
+.chart-card .sub { font-size: 13px; color: var(--muted); margin: 0 0 6px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; margin: 4px 0 0; padding: 0; list-style: none; }
+.legend li { display: flex; align-items: center; gap: 6px; }
+.swatch { width: 16px; height: 3px; border-radius: 2px; display: inline-block; }
+svg text { fill: var(--muted); font: 11px var(--body); font-variant-numeric: tabular-nums; }
+.grid-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 4px; background: var(--surface); }
+table.grid { border-collapse: collapse; width: 100%; min-width: 1260px; }
+.grid th { position: sticky; top: 0; z-index: 2; background: var(--surface); text-align: left; padding: 10px 10px 8px; border-bottom: 1px solid var(--rule); vertical-align: bottom; }
+.grid th .tname { display: flex; align-items: center; gap: 7px; font-size: 19px; font-weight: 700; }
+.grid th .tdef { display: block; font-family: var(--body); font-weight: 400; font-size: 12.5px; color: var(--muted); line-height: 1.35; margin-top: 2px; }
+.grid th.budget { width: 84px; }
+.grid td { padding: 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.grid tr.race td { background: var(--race); }
+.grid td.budget { position: sticky; left: 0; background: var(--surface); z-index: 1; font-family: var(--display); font-weight: 700; font-size: 24px; line-height: 1; padding-top: 14px; font-variant-numeric: tabular-nums; }
+.grid tr.race td.budget { background: var(--race); }
+.grid td.budget small { display: block; font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: .04em; margin-top: 2px; }
+.cell { display: grid; gap: 6px; padding: 6px; border-radius: 4px; cursor: pointer; border: 1px solid transparent; height: 100%; }
+.cell:hover { border-color: var(--rule); }
+.cell.rank1 { --medal: var(--gold); }
+.cell.rank2 { --medal: var(--silver); }
+.cell.rank3 { --medal: var(--bronze); }
+.cell.medal { border: 2px solid var(--medal); background: color-mix(in srgb, var(--medal) 9%, var(--surface)); }
+.cell svg.map { width: 100%; height: auto; aspect-ratio: 4 / 3; display: block; }
+.cell svg.spark { width: 100%; height: 26px; display: block; }
+.stats { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; font-variant-numeric: tabular-nums; }
+.gain { font-family: var(--display); font-size: 22px; font-weight: 700; line-height: 1; }
+.gain small { font-size: 14px; font-weight: 600; }
+.dist { font-size: 13.5px; color: var(--muted); }
+.detail-line { font-size: 12.5px; color: var(--muted); line-height: 1.35; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.chip { font-size: 12.5px; font-weight: 600; letter-spacing: .03em; padding: 1px 7px; border-radius: 10px; border: 1px solid var(--rule); color: var(--muted); }
+.chip.proven { color: var(--ink); border-color: var(--muted); }
+.none { font-size: 13px; color: var(--muted); padding: 10px 6px; }
+.pending { font-size: 13px; color: var(--muted); padding: 10px 6px; font-style: italic; }
+dialog { border: 1px solid var(--rule); border-radius: 6px; padding: 0; background: var(--surface); color: var(--ink); width: min(980px, calc(100vw - 32px)); max-height: calc(100vh - 32px); }
+dialog::backdrop { background: rgb(10 14 12 / .55); }
+.dlg { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 18px; padding: 18px; }
+@media (max-width: 760px) { .dlg { grid-template-columns: minmax(0, 1fr); } }
+.dlg-head { grid-column: 1 / -1; display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.dlg-head h2 { margin: 0; font-size: 28px; line-height: 1.05; font-weight: 700; }
+.dlg-head p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+.dlg svg.map { width: 100%; height: auto; aspect-ratio: 4 / 3; display: block; border: 1px solid var(--rule); border-radius: 4px; }
+.dlg svg.profile { width: 100%; height: auto; display: block; }
+.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 0 0 12px; }
+.kv div { border-top: 2px solid var(--rule); padding-top: 4px; }
+.kv dt { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; font-family: var(--display); font-weight: 600; }
+.kv dd { margin: 0; font-family: var(--display); font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.peaks { margin: 10px 0 0; font-size: 14px; }
+.peaks:empty { display: none; }
+.legs { list-style: none; margin: 8px 0 0; padding: 0; max-height: 300px; overflow-y: auto; border-top: 1px solid var(--rule); font-size: 13.5px; }
+.legs li { display: grid; grid-template-columns: 58px 1fr; gap: 8px; padding: 4px 0; border-bottom: 1px solid var(--rule); }
+.legs .mi { text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
+.side h3 { font-family: var(--display); font-size: 15px; text-transform: uppercase; letter-spacing: .06em; margin: 14px 0 0; color: var(--muted); font-weight: 600; }
+.foot { font-size: 13px; color: var(--muted); max-width: 90ch; }
+@media (prefers-reduced-motion: no-preference) { .cell { transition: border-color .15s; } }
+</style>
+
+<div class="wrap">
+  <nav class="sites" id="sites" aria-label="Trailhead"></nav>
+  <section class="top">
+    <div>
+      <p class="eyebrow" id="place"></p>
+      <h1 id="title"></h1>
+      <p class="lede">For whole-mile distance budgets up to 31 miles and the exact race distances (5K, 10K, half marathon, marathon, 50K), standing in for the nearest whole mile, the route that climbs the most in five closed shapes and one-way to another trailhead. Each map shows the route over the surrounding trail network, with the start as a circle and a one-way finish as a square. Select a route for its profile and turn-by-turn trail list.</p>
+      <p class="lede">Gain is from USGS 3DEP elevation smoothed over 50 m, so a watch will usually read somewhat higher (the unsmoothed figure is in each route's details). Every loop is at least 1 mile and at least a quarter of the route's distance; only out-and-back trail, stems and bridges are run twice. Roads can link trails, but road time (by the Strava grade-adjusted-pace model) is capped at 10% of the route's.</p>
+      <dl class="meta">
+        <dt>Start</dt><dd id="th"></dd>
+        <dt>Trails</dt><dd id="trails"></dd>
+        <dt>Solver</dt><dd>OR-Tools CP-SAT; “optimal” means proven</dd>
+      </dl>
+      <div class="actions">
+        <button class="btn" id="all" type="button">Download all GPX for this trailhead</button>
+        <span class="status" id="all-status"></span>
+      </div>
+    </div>
+    <figure class="chart-card">
+      <h2>Climbing rate by distance</h2>
+      <p class="sub">Feet of gain per mile of the route against the distance budget. Hollow points are the best found within the time limit, not proven optimal.</p>
+      <div id="chart"></div>
+      <ul class="legend" id="legend"></ul>
+    </figure>
+  </section>
+
+  <div class="grid-wrap">
+    <table class="grid" id="grid">
+      <thead><tr id="head"><th class="budget">Budget</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <p class="foot">Gold, silver and bronze outlines mark the three shapes with the most gain at each distance; ties share a medal. Shaded rows are race distances. A one-way route ends where a trail meets a road open to cars that OpenStreetMap doesn't mark as unpaved; most roads carry no surface tag and count as paved. Arrange the return before you go. Trails closed on the NY-NJ Trail Conference's December 2025 Bear Mountain area status map are excluded; check current conditions before you go. On claude.ai, GPX files download inside .zip archives because the viewer only saves certain file types.</p>
+</div>
+
+<dialog id="dlg" aria-labelledby="dlg-title">
+  <div class="dlg">
+    <div class="dlg-head">
+      <div>
+        <h2 id="dlg-title"></h2>
+        <p id="dlg-sub"></p>
+      </div>
+      <div class="actions" style="margin-top:0">
+        <button class="btn" id="dlg-gpx" type="button">Download GPX</button>
+        <button class="btn ghost" id="dlg-close" type="button">Close</button>
+      </div>
+    </div>
+    <div>
+      <div id="dlg-map"></div>
+      <div id="dlg-profile" style="margin-top:12px"></div>
+    </div>
+    <div class="side">
+      <dl class="kv" id="dlg-kv"></dl>
+      <p class="peaks" id="dlg-peaks"></p>
+      <div class="chips" id="dlg-chips"></div>
+      <p class="status" id="dlg-status"></p>
+      <h3>Trails in order</h3>
+      <ol class="legs" id="dlg-legs"></ol>
+    </div>
+  </div>
+</dialog>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="net" overflow="visible"><path id="net-path" fill="none" stroke="var(--net)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></symbol></defs></svg>
+
+<script type="application/json" id="data">__DATA__</script>
+<script>
+(() => {
+  const DATA = JSON.parse(document.getElementById("data").textContent);
+  const TOPOS = [
+    ["loop", "Loop", "One loop through the trailhead, nothing repeated."],
+    ["out-and-back", "Out-and-back", "Out and back on the same trail."],
+    ["lollipop", "Lollipop", "A stem from the trailhead to one loop, stem run twice."],
+    ["dumbbell", "Dumbbell", "Start on one loop, bridge to a second loop, bridge back."],
+    ["figure-8", "Figure-8", "Two loops sharing one crossing point, nothing repeated."],
+    ["traverse", "Point-to-point", "One way to another trailhead (where trail meets a paved road), nothing repeated."],
+    ["loop-spurs", "Loop with spurs", "One loop plus any out-and-back side trips (the loop may also have a stem)."],
+  ].filter(t => !DATA.shapes || DATA.shapes.includes(t[0]));
+  const NAME = Object.fromEntries(TOPOS.map(t => [t[0], t[1]]));
+  const MEDALS = { 1: "gold", 2: "silver", 3: "bronze" };
+  const color = t => `var(--c-${t})`;
+  const fmt = n => n.toLocaleString("en-US");
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  // Polyline decoding (Google's algorithm): flat int deltas, or interleaved pairs scaled by `scale`.
+  function decodeInts(str) {
+    const out = [];
+    let i = 0, v = 0;
+    while (i < str.length) {
+      let shift = 0, res = 0, b;
+      do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      v += res & 1 ? ~(res >> 1) : res >> 1;
+      out.push(v);
+    }
+    return out;
+  }
+  // Pairs are encoded as two interleaved delta streams, one running sum per column.
+  function decodeColumns(str, scale) {
+    const raw = [];
+    let i = 0;
+    while (i < str.length) {
+      let shift = 0, res = 0, b;
+      do { b = str.charCodeAt(i++) - 63; res |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+      raw.push(res & 1 ? ~(res >> 1) : res >> 1);
+    }
+    const out = [];
+    let a = 0, b = 0;
+    for (let k = 0; k + 1 < raw.length; k += 2) { a += raw[k]; b += raw[k + 1]; out.push([a / scale, b / scale]); }
+    return out;
+  }
+
+  let site = null, cells = {}, P = null, TH = null, current = null;
+
+  function mapSVG(c, cls) {
+    const pts = c.pts;
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const [x, y] of pts) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+    let bw = (x1 - x0) * 1.24, bh = (y1 - y0) * 1.24;
+    const asp = 4 / 3;
+    if (bw / bh < asp) bw = bh * asp; else bh = bw / asp;
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, vb = [cx - bw / 2, cy - bh / 2, bw, bh];
+    const d = "M" + pts.map(p => p[0].toFixed(5) + " " + p[1].toFixed(5)).join("L");
+    const r = bw * 0.018;
+    const end = c.endll ? P(c.endll) : null;
+    return `<svg class="${cls}" viewBox="${vb.map(v => v.toFixed(5)).join(" ")}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(NAME[c.t])} route map, ${c.dist} miles">
+      <rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="var(--surface)"/>
+      <use href="#net"/>
+      <path d="${d}" fill="none" stroke="var(--surface)" stroke-width="5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="${d}" fill="none" stroke="${color(c.t)}" stroke-width="2.25" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${pts[0][0]}" cy="${pts[0][1]}" r="${r}" fill="var(--surface)" stroke="var(--mark)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      ${end ? `<rect x="${end[0] - r}" y="${end[1] - r}" width="${2 * r}" height="${2 * r}" fill="var(--mark)" stroke="var(--surface)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
+    </svg>`;
+  }
+  const detailText = c => c.t !== "loop" ? c.details
+    : "Single loop, no repeated trail" + (c.details.includes(";") ? ";" + c.details.split(";").slice(1).join(";") : "");
+  function sparkSVG(c) {
+    const pr = c.prof, W = 200, H = 26, dmax = pr[pr.length - 1][0], zmax = site.zmax;
+    const pts = pr.map(([d, z]) => [(d / dmax) * W, H - 1 - (z / zmax) * (H - 2)]);
+    const line = "M" + pts.map(p => p[0].toFixed(1) + " " + p[1].toFixed(1)).join("L");
+    return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+      <path d="${line}L${W} ${H}L0 ${H}Z" fill="${color(c.t)}" fill-opacity=".16"/>
+      <path d="${line}" fill="none" stroke="${color(c.t)}" stroke-width="1.25" vector-effect="non-scaling-stroke"/>
+    </svg>`;
+  }
+
+  const head = document.getElementById("head");
+  for (const [t, name, def] of TOPOS) {
+    const th = document.createElement("th");
+    th.innerHTML = `<span class="tname"><span class="swatch" style="background:${color(t)}"></span>${name}</span><span class="tdef">${def}</span>`;
+    head.appendChild(th);
+  }
+  document.getElementById("legend").innerHTML = TOPOS.map(([t, n]) => `<li><span class="swatch" style="background:${color(t)}"></span>${n}</li>`).join("");
+
+  function renderSite(slug) {
+    site = DATA.sites.find(s => s.slug === slug) || DATA.sites[0];
+    try { localStorage.setItem("site", site.slug); } catch (e) {}
+    if (location.hash !== "#" + site.slug) history.replaceState(null, "", "#" + site.slug);
+    document.querySelectorAll(".site").forEach(b => b.setAttribute("aria-pressed", b.dataset.slug === site.slug));
+    document.getElementById("place").textContent = site.place;
+    document.getElementById("title").textContent = site.title;
+    document.getElementById("th").textContent = `${site.trailhead[0].toFixed(5)}, ${site.trailhead[1].toFixed(5)}`;
+    document.getElementById("trails").textContent = site.network_note || `OpenStreetMap paths and tracks; ${site.roads ? `road walks up to ${site.roads}% of the route's grade-adjusted time` : "roads crossed, never followed"}; closed Bear Mountain–Harriman trails (Trail Conference map, Dec 2025) avoided`;
+    document.getElementById("all-status").textContent = "";
+    const kx = Math.cos(site.trailhead[0] * Math.PI / 180);
+    P = ([la, lo]) => [lo * kx, -la];
+    TH = P(site.trailhead);
+    document.getElementById("net-path").setAttribute("d",
+      site.net.split(" ").map(e => "M" + decodeColumns(e, 1e5).map(p => P(p).map(v => v.toFixed(5)).join(" ")).join("L")).join(""));
+    cells = {};
+    for (const c of site.cells) {
+      if (!c.none && !c.pts) {
+        c.pts = decodeColumns(c.line, 1e5).map(P);
+        c.prof = decodeColumns(c.profile, 100).map(([d, z]) => [d, z * 100]);
+      }
+      cells[`${c.t}_${c.b}`] = c;
+    }
+    renderGrid();
+    renderChart();
+  }
+
+  function renderGrid() {
+    const rows = document.getElementById("rows");
+    rows.innerHTML = "";
+    for (const { mi, label, race } of DATA.budgets) {
+      const tr = document.createElement("tr");
+      if (race) tr.className = "race";
+      tr.innerHTML = race ? `<td class="budget">${label}<small>${mi.toFixed(2)} MI</small></td>` : `<td class="budget">${label}<small>MILES</small></td>`;
+      const gains = TOPOS.map(([t]) => cells[`${t}_${label}`]).filter(c => c && !c.none).map(c => c.gain);
+      const rankOf = g => 1 + gains.filter(x => DATA.minimize ? x < g : x > g).length;
+      for (const [t] of TOPOS) {
+        const td = document.createElement("td");
+        const c = cells[`${t}_${label}`];
+        if (!c) td.innerHTML = `<div class="pending">Not computed</div>`;
+        else if (c.none === "timeout") td.innerHTML = `<div class="none">None found in 120 s.</div>`;
+        else if (c.none) td.innerHTML = `<div class="none">No ${NAME[t].toLowerCase()} fits in ${race ? label : label + " miles"}.</div>`;
+        else {
+          const rank = rankOf(c.gain), medal = MEDALS[rank];
+          td.innerHTML = `<div class="cell${medal ? ` medal rank${rank}` : ""}" tabindex="0" role="button" data-key="${t}_${label}"
+              aria-label="${NAME[t]}, ${race ? label : label + " mile"} budget: ${fmt(c.gain)} feet over ${c.dist} miles${medal ? `, ${medal}` : ""}. Open details.">
+            ${mapSVG(c, "map")}
+            ${sparkSVG(c)}
+            <div class="stats"><span class="gain">${fmt(c.gain)}<small> ft</small></span><span class="dist">${c.dist.toFixed(2)} mi · ${fmt(Math.round(c.gain / c.dist))} ft/mi</span></div>
+            <div class="detail-line">${esc(detailText(c))}</div>
+            <div class="chips"><span class="chip${c.proven ? " proven" : ""}">${c.proven ? "Optimal" : "Best found"}</span></div>
+          </div>`;
+        }
+        tr.appendChild(td);
+      }
+      rows.appendChild(tr);
+    }
+  }
+
+  function renderChart() {
+    const W = 560, H = 300, m = { l: 48, r: 12, t: 18, b: 30 };
+    const all = site.cells.filter(c => !c.none);
+    const rate = c => c.gain / c.dist, step = 100;
+    const ymax = Math.ceil(Math.max(...all.map(rate)) / step) * step;
+    const ymin = Math.floor(Math.min(...all.map(rate)) / step) * step;
+    const bx0 = DATA.budgets[0].mi, bx1 = DATA.budgets[DATA.budgets.length - 1].mi;
+    const X = b => m.l + (b - bx0) / (bx1 - bx0) * (W - m.l - m.r);
+    const Y = g => H - m.b - (g - ymin) / Math.max(ymax - ymin, step) * (H - m.t - m.b);
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Feet of gain per mile against distance budget for each route shape">`;
+    s += `<text x="${m.l - 6}" y="${m.t - 6}" text-anchor="end">ft/mi</text>`;
+    for (let g = ymin; g <= ymax; g += step) {
+      s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(g)}" y2="${Y(g)}" stroke="var(--rule)" stroke-width="1"/>`;
+      s += `<text x="${m.l - 6}" y="${Y(g) + 4}" text-anchor="end">${fmt(g)}</text>`;
+    }
+    for (let b = Math.ceil(bx0); b <= bx1; b += 1) {
+      if (b % 5 === 0 || b === Math.ceil(bx0)) s += `<text x="${X(b)}" y="${H - m.b + 16}" text-anchor="middle">${b} mi</text>`;
+    }
+    for (const [t] of TOPOS) {
+      const cs = DATA.budgets.map(b => cells[`${t}_${b.label}`]).filter(c => c && !c.none);
+      if (!cs.length) continue;
+      s += `<path d="${cs.map((c, i) => (i ? "L" : "M") + X(c.mi).toFixed(1) + " " + Y(rate(c)).toFixed(1)).join("")}" fill="none" stroke="${color(t)}" stroke-width="2" stroke-linejoin="round"/>`;
+      for (const c of cs) {
+        s += `<circle class="pt" tabindex="0" role="button" data-key="${t}_${c.b}" cx="${X(c.mi)}" cy="${Y(rate(c))}" r="4" fill="${c.proven ? color(t) : "var(--surface)"}" stroke="${color(t)}" stroke-width="1.75" style="cursor:pointer"><title>${NAME[t]}, ${c.b}${/^\d+$/.test(c.b) ? " mi" : ""} budget: ${fmt(Math.round(rate(c)))} ft/mi (${fmt(c.gain)} ft over ${c.dist} mi)${c.proven ? " (optimal)" : " (best found)"}</title></circle>`;
+      }
+    }
+    document.getElementById("chart").innerHTML = s + `</svg>`;
+  }
+
+  // Site buttons
+  const nav = document.getElementById("sites");
+  nav.innerHTML = DATA.sites.map(s => `<button class="site" type="button" data-slug="${s.slug}" aria-pressed="false">${esc(s.short)}<small>${esc(s.place)}</small></button>`).join("");
+  nav.addEventListener("click", e => { const b = e.target.closest(".site"); if (b) renderSite(b.dataset.slug); });
+
+  // Detail dialog
+  const dlg = document.getElementById("dlg");
+  function profileSVG(c) {
+    const W = 560, H = 190, m = { l: 46, r: 10, t: 8, b: 26 };
+    const pr = c.prof, dmax = pr[pr.length - 1][0];
+    const zmax = Math.ceil(site.zmax / 500) * 500;
+    const X = d => m.l + d / dmax * (W - m.l - m.r), Y = z => H - m.b - z / zmax * (H - m.t - m.b);
+    let s = `<svg class="profile" viewBox="0 0 ${W} ${H}" role="img" aria-label="Elevation profile">`;
+    for (let z = 0; z <= zmax; z += 500) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(z)}" y2="${Y(z)}" stroke="var(--rule)"/><text x="${m.l - 6}" y="${Y(z) + 4}" text-anchor="end">${fmt(z)}</text>`;
+    const stepx = dmax > 16 ? 4 : dmax > 8 ? 2 : 1;
+    for (let d = 0; d <= dmax + 1e-9; d += stepx) s += `<text x="${X(d)}" y="${H - m.b + 16}" text-anchor="middle">${d} mi</text>`;
+    const line = "M" + pr.map(([d, z]) => X(d).toFixed(1) + " " + Y(z).toFixed(1)).join("L");
+    s += `<path d="${line}L${X(dmax)} ${Y(0)}L${X(0)} ${Y(0)}Z" fill="${color(c.t)}" fill-opacity=".14"/>`;
+    s += `<path d="${line}" fill="none" stroke="${color(c.t)}" stroke-width="2" stroke-linejoin="round"/>`;
+    return s + `<text x="${W - m.r}" y="${m.t + 10}" text-anchor="end">feet</text></svg>`;
+  }
+  function open(key) {
+    const c = cells[key];
+    if (!c || c.none) return;
+    current = c;
+    const budget = /^\d+$/.test(c.b) ? `${c.b}-mile budget` : `${c.b} (${c.mi} mi)`;
+    document.getElementById("dlg-title").textContent = `${NAME[c.t]}, ${budget}`;
+    document.getElementById("dlg-sub").textContent = `${site.title}. ${detailText(c)}`;
+    document.getElementById("dlg-map").innerHTML = mapSVG(c, "map");
+    document.getElementById("dlg-profile").innerHTML = profileSVG(c);
+    document.getElementById("dlg-kv").innerHTML = [
+      ["Gain", `${fmt(c.gain)} ft`], ["Distance", `${c.dist.toFixed(2)} mi`], ["Rate", `${fmt(Math.round(c.gain / c.dist))} ft/mi`],
+      ["Unsmoothed gain", `${fmt(c.raw)} ft`], ["High point", `${fmt(c.high)} ft`], ["Solve time", `${c.solve} s`],
+    ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
+    document.getElementById("dlg-chips").innerHTML = `<span class="chip${c.proven ? " proven" : ""}">${c.proven ? "Proven optimal" : "Best found (not proven optimal)"}</span>`;
+    document.getElementById("dlg-peaks").textContent = c.peaks && c.peaks.length ? `Over: ${c.peaks.join(", ")}` : "";
+    document.getElementById("dlg-legs").innerHTML = c.legs.map(([n, mi]) => `<li><span class="mi">${mi.toFixed(2)} mi</span><span>${esc(n)}</span></li>`).join("");
+    document.getElementById("dlg-status").textContent = "";
+    if (!dlg.open) dlg.showModal();
+  }
+  document.addEventListener("click", e => { const el = e.target.closest("[data-key]"); if (el) open(el.dataset.key); });
+  document.addEventListener("keydown", e => {
+    const el = e.target.closest && e.target.closest("[data-key]");
+    if (el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(el.dataset.key); }
+  });
+  document.getElementById("dlg-close").addEventListener("click", () => dlg.close());
+  dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
+
+  // Full-resolution tracks: routes/<slug>.json online; routes/<slug>.js from a saved copy (file:// can't fetch).
+  window.__ROUTES__ = window.__ROUTES__ || {};
+  async function routesFor(slug) {
+    if (window.__ROUTES__[slug]) return window.__ROUTES__[slug];
+    if (location.protocol !== "file:") {
+      const res = await fetch(`routes/${slug}.json`);
+      if (!res.ok) throw { message: `couldn't load the track data (${res.status})` };
+      return (window.__ROUTES__[slug] = await res.json());
+    }
+    await new Promise((resolve, reject) => {
+      const sc = document.createElement("script");
+      sc.src = `routes/${slug}.js`;
+      sc.onload = resolve;
+      sc.onerror = () => reject({ message: "couldn't load the track data" });
+      document.head.appendChild(sc);
+    });
+    return window.__ROUTES__[slug];
+  }
+  function gpxText(name, rec) {
+    const [ll, ele] = rec.split(" ");
+    const pts = decodeColumns(ll, 1e5), z = decodeInts(ele);
+    const trk = pts.map(([la, lo], i) => `<trkpt lat="${la.toFixed(5)}" lon="${lo.toFixed(5)}"><ele>${(z[i] / 10).toFixed(1)}</ele></trkpt>`).join("\n");
+    return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="max_gain_route.py" xmlns="http://www.topografix.com/GPX/1/1">\n<trk><name>${esc(name)}</name><trkseg>\n${trk}\n</trkseg></trk>\n</gpx>\n`;
+  }
+
+  const CRC = new Uint32Array(256).map((_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+  const crc32 = bytes => { let c = 0xffffffff; for (let i = 0; i < bytes.length; i++) c = CRC[(c ^ bytes[i]) & 255] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+  const DOS_DATE = ((2026 - 1980) << 9) | (10 << 5) | 3;
+  function zip(entries) {  // entries: [{name, text}], stored without compression
+    const enc = new TextEncoder(), parts = [], central = [];
+    let offset = 0;
+    const put = (view, fields) => fields.forEach(([o, v, n]) => n === 4 ? view.setUint32(o, v, true) : view.setUint16(o, v, true));
+    for (const { name, text } of entries) {
+      const nm = enc.encode(name), bytes = enc.encode(text), crc = crc32(bytes);
+      const local = new DataView(new ArrayBuffer(30)), cen = new DataView(new ArrayBuffer(46));
+      put(local, [[0, 0x04034b50, 4], [4, 20, 2], [12, DOS_DATE, 2], [14, crc, 4], [18, bytes.length, 4], [22, bytes.length, 4], [26, nm.length, 2]]);
+      put(cen, [[0, 0x02014b50, 4], [4, 20, 2], [6, 20, 2], [14, DOS_DATE, 2], [16, crc, 4], [20, bytes.length, 4], [24, bytes.length, 4], [28, nm.length, 2], [42, offset, 4]]);
+      parts.push(local, nm, bytes);
+      central.push(cen, nm);
+      offset += 30 + nm.length + bytes.length;
+    }
+    const size = central.reduce((s, p) => s + p.byteLength, 0), end = new DataView(new ArrayBuffer(22));
+    put(end, [[0, 0x06054b50, 4], [8, entries.length, 2], [10, entries.length, 2], [12, size, 4], [16, offset, 4]]);
+    return new Blob([...parts, ...central, end], { type: "application/zip" });
+  }
+
+  // Saving: the claude.ai viewer hands files to its save prompt (zip only); a saved copy uses a plain download.
+  let downloads = null;
+  const local = !(window.claude && claude.use);
+  if (!local) claude.use("downloads").then(d => { downloads = d; }).catch(() => {});
+  function localSave(filename, blob) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }
+  async function save(statusEl, build) {
+    statusEl.textContent = "Preparing…";
+    try {
+      const { filename, entries } = await build();
+      if (local) {
+        localSave(entries.length === 1 ? entries[0].name : filename,
+          entries.length === 1 ? new Blob([entries[0].text], { type: "application/gpx+xml" }) : zip(entries));
+        statusEl.textContent = "Downloaded.";
+        return;
+      }
+      if (!downloads) { statusEl.textContent = "Downloads aren't available in this view."; return; }
+      await downloads.save({ filename, data: zip(entries) });
+      statusEl.textContent = "Saved.";
+    } catch (err) {
+      const code = err && err.code;
+      statusEl.textContent = code === "declined" ? "Download cancelled."
+        : code === "rate_limited" ? "A download prompt is already open."
+        : code === "extension_not_enabled" ? "Zip downloads are switched off in this view."
+        : `Download failed: ${(err && err.message) || "unknown error"}.`;
+    }
+  }
+  document.getElementById("dlg-gpx").addEventListener("click", () => current && save(document.getElementById("dlg-status"), async () => {
+    const r = (await routesFor(site.slug))[current.key];
+    return { filename: current.file.replace(/\.gpx$/, ".zip"), entries: [{ name: current.file, text: gpxText(current.gpxname, r) }] };
+  }));
+  document.getElementById("all").addEventListener("click", () => save(document.getElementById("all-status"), async () => {
+    const routes = await routesFor(site.slug);
+    const entries = site.cells.filter(c => !c.none).map(c => ({ name: c.file, text: gpxText(c.gpxname, routes[c.key]) }));
+    return { filename: `${site.slug}_max_gain_routes.zip`, entries };
+  }));
+
+  let start = null;
+  try { start = localStorage.getItem("site"); } catch (e) {}
+  renderSite(location.hash.slice(1) || start || DATA.sites[0].slug);
+})();
+</script>

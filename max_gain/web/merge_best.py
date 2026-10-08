@@ -36,6 +36,7 @@ def uses_closed(gpx):
     d = np.hypot((pts[None, :, 0] - mids[:, None, 0]) * 110540, (pts[None, :, 1] - mids[:, None, 1]) * 83000).min(1)
     return (d < 8).sum() >= 3
 
+EXCLUDED_END_ROADS = {"Mount Washington Auto Road", "Breakneck Road"}  # one-way routes may not end on these
 sites = sorted({p.split("/")[-3] for s in srcs for p in glob.glob(f"{s}/*/cells/*.json")})
 dropped = 0
 for site in sites:
@@ -53,7 +54,8 @@ for site in sites:
             if not os.path.exists(p):
                 continue
             c = json.load(open(p))
-            if "none" not in c and uses_closed(f"{s}/{site}/{c['gpx']}"):
+            if "none" not in c and (uses_closed(f"{s}/{site}/{c['gpx']}")
+                                    or c.get("end", "").split(" at ")[-1] in EXCLUDED_END_ROADS):
                 dropped += 1
                 continue
             g = -1 if "none" in c else c["gain_ft"]

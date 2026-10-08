@@ -19,7 +19,7 @@
   --c-dumbbell: #c98500;
   --c-figure-8: #e87ba4;
   --c-traverse: #4a3aa7;
-  --c-loop-spurs: #eb6834;
+  --c-spurred: #c4387a;
   --gold: #b8860b;
   --silver: #8a939b;
   --bronze: #a8643a;
@@ -44,8 +44,8 @@
     --c-dumbbell: #c98500;
     --c-figure-8: #d55181;
     --c-traverse: #9085e9;
-  --c-loop-spurs: #d95926;
-    --c-loop-spurs: #d95926;
+  --c-spurred: #e0609a;
+    --c-spurred: #e0609a;
     --gold: #e0b43a;
     --silver: #b9c1c8;
     --bronze: #cd8a5b;
@@ -236,7 +236,7 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     ["dumbbell", "Dumbbell", "Start on one loop, bridge to a second loop, bridge back."],
     ["figure-8", "Figure-8", "Two loops sharing one crossing point, nothing repeated."],
     ["traverse", "Point-to-point", "One way to another trailhead (where trail meets a paved road), nothing repeated."],
-    ["loop-spurs", "Loop with spurs", "One loop plus any out-and-back side trips (the loop may also have a stem)."],
+    ["spurred", "Spurred", "Any closed route with out-and-back side trips that turn around only at summits."],
   ].filter(t => !DATA.shapes || DATA.shapes.includes(t[0]));
   const NAME = Object.fromEntries(TOPOS.map(t => [t[0], t[1]]));
   const MEDALS = { 1: "gold", 2: "silver", 3: "bronze" };

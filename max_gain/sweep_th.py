@@ -164,7 +164,7 @@ SITE_AREAS["inwood-215"] = SITE_AREAS["fort-tryon-190"] = SITE_AREAS["dyckman-a"
 # Area sites whose one-way routes may also end at another start (e.g. the other subway station).
 UPTOWN_STATIONS = ['inwood-215', 'fort-tryon-190', 'dyckman-a']
 AREA_EXTRA_ENDS = {s: [t for t in UPTOWN_STATIONS if t != s] for s in UPTOWN_STATIONS}
-# Sites whose loops (from any seed directory) also seed this site's, when they pass its start.
+# Sites whose loops, figure-8s and dumbbells (from any seed directory) also seed this site's, when a loop passes its start.
 SHARED_LOOP_SITES = {"central-park": ["central-park-south"], "central-park-south": ["central-park"],
                      **{s: [t for t in UPTOWN_STATIONS if t != s] for s in UPTOWN_STATIONS}}
 BASE_TRAIL_HIGHWAYS = list(mg.TRAIL_HIGHWAYS)
@@ -202,7 +202,7 @@ PRIMARY_ROAD_SITES = {"harding-road"}
 MAJOR_ROADS = ["primary", "primary_link", "trunk", "trunk_link"]
 # Areas (lat, lon, radius m) where a route may not end: road access that isn't a trailhead.
 EXCLUDED_ENDS = [(44.27060, -71.30330, 500.0)]  # Mount Washington summit facilities
-EXCLUDED_END_ROADS = {"Mount Washington Auto Road"}  # nor anywhere along these roads
+EXCLUDED_END_ROADS = {"Mount Washington Auto Road", "Breakneck Road"}  # nor anywhere along these roads (NY 9D at Breakneck)
 # Per-site closures (OSM node pairs): trail access that a site's routes may not use.
 SITE_CLOSED = {"mikes-house": {frozenset((983378796, 1129156784))}}  # footway off Marion Avenue, Nelsonville
 
@@ -239,8 +239,13 @@ def with_pistes(osm, point, radius_m):
     return dict(osm, elements=osm["elements"] + add)
 
 
-def raw_graph(slug, p2p):
-    """Trails and roads (closures removed), split at junctions, before road pruning."""
+SUMMIT_NODES = {}  # slug -> graph nodes at named peaks: the only places a summit-spur route may turn around
+SUMMIT_M = 60.0  # a peak counts if a trail passes this close
+
+
+def raw_graph(slug, p2p, summits=False):
+    """Trails and roads (closures removed), split at junctions (and with ``summits``, at the trail point nearest each
+    named peak), before road pruning."""
     th = TRAILHEADS[slug][2]
     mg.TRAIL_HIGHWAYS[:] = BASE_TRAIL_HIGHWAYS + (["pedestrian"] if slug in SITE_AREAS else [])
     if slug in SITE_AREAS:
@@ -261,8 +266,20 @@ def raw_graph(slug, p2p):
                 osm = with_pistes(osm, th, DMAX * mg.MI_TO_M / 2)
             heads = {}
         anchors = [th] + ([] if ROAD_RUNS else [TRAILHEADS[t][2] for t in ROAD_START_SITES.get(slug, [])])
+        base = len(anchors)
+        if summits:
+            r = DMAX * mg.MI_TO_M / 2
+            q = f'[out:json][timeout:120];node["natural"="peak"]["name"](around:{r:.0f},{th[0]:.6f},{th[1]:.6f});out;'
+            anchors += [(x["lat"], x["lon"]) for x in mg._overpass(q, "peaks")["elements"]]
         raw, ids = mg.build_graph(osm, True, None, anchors, extra_ids=heads, closed=CLOSED | SITE_CLOSED.get(slug, set()),
                                   snap_roads=(0,) if slug in ROAD_START_SITES or ROAD_RUNS else ())
+        if summits:
+            at = {}
+            for e in raw:
+                at[e["u"]], at[e["v"]] = e["latlon"][0], e["latlon"][-1]
+            SUMMIT_NODES[slug] = {n for n, pt in zip(ids[base:], anchors[base:])
+                                  if n in at and mg._haversine(*at[n], *pt) <= SUMMIT_M}
+            ids = ids[:base]
     walk_major = ("primary", "primary_link") if slug in PRIMARY_ROAD_SITES else ()
     for e in raw:
         e["walk"] = not e["road"] or e["highway"] not in MAJOR_ROADS or e["highway"] in walk_major
@@ -331,7 +348,7 @@ def street_walks(raw, start, targets):
     return {id(raw[G[u][v]["k"]]) for t in targets if t in path for u, v in zip(path[t], path[t][1:])}
 
 
-def tier_graph(raw, ids, heads, tier_mi):
+def tier_graph(raw, ids, heads, tier_mi, keep_nodes=()):
     """The graph for one road-walk tier: road links up to ``tier_mi``, pruned, contracted, with elevation."""
     with contextlib.redirect_stdout(io.StringIO()):
         if raw and raw[0].get("free"):  # an area site: everything in it
@@ -354,7 +371,7 @@ def tier_graph(raw, ids, heads, tier_mi):
         else:
             keep |= hub_roads(raw, ids[0])
         base = [dict(e) for e in raw if id(e) in keep]  # copies: add_elevation writes to edges
-        base = mg.contract(mg.prune(base, DMAX * mg.MI_TO_M, ids, list(heads) or None), set(ids) | set(heads))
+        base = mg.contract(mg.prune(base, DMAX * mg.MI_TO_M, ids, list(heads) or None), set(ids) | set(heads) | set(keep_nodes))
         mg.add_elevation(base, 50.0, "3dep")
     return base
 
@@ -386,6 +403,7 @@ SEED_TOL_M = 0.5  # seed tracks and graphs share OSM vertices, so a node passed 
 def seed_routes(slug, name, D):
     """Saved routes for this row: of this shape, and for a loop with spurs also its special cases (loops, lollipops)."""
     names = [name] + (["loop", "lollipop"] if name == "loop-spurs" else
+                      ["loop", "lollipop", "figure-8", "dumbbell", "loop-spurs"] if name == "spurred" else
                       ["loop"] if name == "lollipop" and slug in SITE_AREAS else [])  # another start's loop: a lollipop here
     return sorted((r for n in names for r in seed_routes_of(slug, n, D)), reverse=True)
 
@@ -395,7 +413,7 @@ def seed_routes_of(slug, name, D):
     run's and earlier runs'), and for a start on a street also those of its trailheads."""
     found = {}
     others = ROAD_RUN_NEIGHBORS.get(slug, []) if ROAD_RUNS else ROAD_START_SITES.get(slug, [])
-    for site in [slug] + others + (SHARED_LOOP_SITES.get(slug, []) if name == "loop" else []):
+    for site in [slug] + others + (SHARED_LOOP_SITES.get(slug, []) if name in ("loop", "figure-8", "dumbbell") else []):
         for d in [OUT] + SEED_DIRS:
             for p in glob.glob(f"{d}/{site}/cells/{name}_*.json"):
                 c = json.load(open(p))
@@ -731,7 +749,9 @@ def job(spec):
     main_st_twice = ROAD_RUNS and MINIMIZE and name == "loop"
     if main_st_twice:
         topo = mg.TOPOLOGIES["loop-spurs"]
-    raw, ids, heads = raw_graph(slug, p2p)
+    # Spurred routes: any closed route whose out-and-back side trips turn around only at summits (or the start).
+    summit_spurs = name in ("spurred", "loop-spurs") and not ROAD_RUNS
+    raw, ids, heads = raw_graph(slug, p2p, summits=summit_spurs)
     ends = list(heads) if p2p else None
     tiers = {}
     mult = 1 if p2p else 2
@@ -739,7 +759,8 @@ def job(spec):
     def tier(t):
         """Per-tier graph, start options and loop bound (built on first use)."""
         if t not in tiers:
-            edges = mg.subdivide(tier_graph(raw, ids, heads, t), None if topo["spurs"] == 0 else 500)
+            edges = mg.subdivide(tier_graph(raw, ids, heads, t, SUMMIT_NODES.get(slug, ()) if summit_spurs else ()),
+                                 None if topo["spurs"] == 0 else 500)
             # Each start option is a trail node the route starts from, the edges run to it out (and back) on top of
             # what the solver picks (the access path, and from a street start the walk to the trailhead), and their
             # distance. The access path stays in the solver's graph so side branches along it remain reachable; the
@@ -857,9 +878,9 @@ def job(spec):
                         elif slug in SITE_AREAS and not (starts_at(gpx, sub, o["core"]) or starts_at(gpx, sub, ids[0])):
                             # Another start's route: a loop through this start as it is; any other shape (but a
                             # traverse) with the walk from this start added, out and back.
-                            if name == "loop":
+                            if name in ("loop", "figure-8", "dumbbell"):  # usable as is if a loop passes this start
                                 cnt = seed_counts(gpx, sub, [], [], mult)
-                                if cnt is not None and not any(c and o["core"] in (x["u"], x["v"]) for x, c in zip(sub, cnt)):
+                                if cnt is not None and not any(c == 1 and o["core"] in (x["u"], x["v"]) for x, c in zip(sub, cnt)):
                                     cnt = None
                             elif name in ("out-and-back", "lollipop"):
                                 cnt = rebase_seed(route_counts(gpx, sub), sub, o["core"], name)
@@ -912,7 +933,8 @@ def job(spec):
                                                            else ROAD_TIME_FRAC),
                                            start_cost=costs, minimize=MINIMIZE,
                                            min_length=MIN_FILL * D * mg.MI_TO_M if MINIMIZE else 0.0,
-                                           no_turnarounds=main_st_twice)
+                                           no_turnarounds=main_st_twice or summit_spurs,
+                                           turnaround_ok=SUMMIT_NODES.get(slug, ()) if summit_spurs else ())
                 pos = {id(x): i for i, x in enumerate(sub)}
                 o = next((o for o in opts if o.get("link") is not None and m[pos[id(o["link"])]]), None) or next(
                     o for o in opts if o["core"] == s and o.get("link") is None)

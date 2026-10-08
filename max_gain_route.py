@@ -99,6 +99,7 @@ TOPOLOGIES = {
     "figure-8": dict(loops=2, spurs=0, start="loop", reuse=False),
     "traverse": dict(loops=0, spurs=0, start=None, reuse=False),
     "loop-spurs": dict(loops=1, spurs=None, start=None, reuse=True),  # one loop plus any out-and-back side trips
+    "spurred": dict(loops=None, spurs=None, start=None, reuse=True),  # any closed route with side trips (to summits)
     "any": dict(loops=None, spurs=None, start=None, reuse=True, retrace_loops=True),
 }
 
@@ -679,7 +680,7 @@ def subdivide(edges, seg_max):
 
 def solve(edges, starts, ends, budget, topology, min_loop, time_limit, workers, verbose, hint=None,
           min_loop_frac=0.0, road_time_frac=None, start_cost=None, minimize=False, min_length=0.0,
-          no_turnarounds=False):
+          no_turnarounds=False, turnaround_ok=()):
     """Return (traversal count per edge, start node, end node, proven optimal) for the best route found.
 
     ``topology`` is a TOPOLOGIES entry. Each loop must be at least ``min_loop`` (m) long and at least
@@ -735,6 +736,10 @@ def solve(edges, starts, ends, budget, topology, min_loop, time_limit, workers, 
         md.AddAtMostOne(a[e], b[e])
         if edges[e].get("frozen"):
             md.Add(a[e] + b[e] == 0)
+        if edges[e].get("require"):  # traversed exactly this many times (1 or 2)
+            md.Add((a[e] if edges[e]["require"] == 1 else b[e]) == 1)
+        if edges[e].get("spur_only"):  # only as an out-and-back
+            md.Add(a[e] == 0)
         if "link" in edges[e]:
             md.Add(b[e] == 0)
         if not reuse or edges[e].get("once") or (eu[e] == ev[e] and not retrace_loops):
@@ -757,12 +762,16 @@ def solve(edges, starts, ends, budget, topology, min_loop, time_limit, workers, 
         virt[n].append(t[j])
         md.AddImplication(t[j], v[n])
 
-    # No turning back except at the start: every other node the route uses touches at least two used edges.
+    # No turning back except at the start (and turnaround_ok nodes): every other node the route uses touches at
+    # least two used edges.
     if no_turnarounds:
         start_lits = {}
         for i, n in enumerate(S):
             start_lits.setdefault(n, []).append(s[i].Not())
+        ok = {idx[n] for n in turnaround_ok if n in idx}
         for n in range(N):
+            if n in ok:
+                continue
             es = {e for e, _ in inc[n] if eu[e] != ev[e]}
             md.Add(sum(a[e] + b[e] for e in es) >= 2).OnlyEnforceIf([v[n]] + start_lits.get(n, []))
 

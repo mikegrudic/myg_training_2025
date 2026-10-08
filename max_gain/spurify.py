@@ -89,6 +89,7 @@ def main():
     anchors = [tuple(pts[0]), tuple(pts[-1])] + [(la, lo) for la, lo, _ in peaks.values()]
     closures = mg.load_closures(sorted(glob.glob(os.path.join(os.path.dirname(mg.__file__), "closures", "*.json"))))
     raw, ids = mg.build_graph(osm, True, None, anchors, closed=closures)
+    raw = [e for e in raw if not e.get("major")]  # highways only where they meet other ways
     at = {}
     for e in raw:
         at[e["u"]], at[e["v"]] = e["latlon"][0], e["latlon"][-1]

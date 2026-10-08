@@ -79,6 +79,7 @@ HEADERS = {"User-Agent": "max_gain_route.py (personal trail-planning script)"}
 TRAIL_HIGHWAYS = ["path", "footway", "track", "bridleway", "steps", "cycleway"]
 ROAD_HIGHWAYS = ["residential", "unclassified", "tertiary", "secondary", "service", "living_street", "road"]
 # Roads whose junctions with trails count as trailheads (wider than the set a route may follow with --roads).
+MAJOR_ROADS = ["primary", "primary_link", "trunk", "trunk_link"]  # fetched with roads, but only ever crossed
 JUNCTION_ROADS = ROAD_HIGHWAYS + ["primary", "primary_link", "secondary_link", "tertiary_link", "trunk", "trunk_link"]
 UNPAVED = {"unpaved", "gravel", "fine_gravel", "compacted", "dirt", "earth", "ground", "grass", "mud", "sand",
            "pebblestone", "rock", "woodchips"}
@@ -131,7 +132,7 @@ def _cached(name, fetch, load, save):
 # ---------------------------------------------------------------- OSM graph
 
 def fetch_osm(points, radius_m, roads):
-    highways = "|".join(TRAIL_HIGHWAYS + (ROAD_HIGHWAYS if roads else []))
+    highways = "|".join(dict.fromkeys(TRAIL_HIGHWAYS + (ROAD_HIGHWAYS + MAJOR_ROADS if roads else [])))
     clauses = "".join(
         f'way["highway"~"^({highways})$"](around:{radius_m:.0f},{lat:.6f},{lon:.6f});' for lat, lon in points
     )
@@ -192,6 +193,10 @@ def road_trailheads(osm, points, radius_m, roads, max_sac, closed=frozenset()):
     return heads
 
 
+def _is_road(highway):
+    return highway in ROAD_HIGHWAYS or highway in MAJOR_ROADS
+
+
 def _usable(tags, roads, max_sac):
     foot = tags.get("foot")
     if foot in ("no", "private"):
@@ -230,7 +235,7 @@ def build_graph(osm, roads, max_sac, anchors, extra_ids=(), connectors_m=0.0, cl
     anchor_ids = []
     for k, (lat, lon) in enumerate(anchors):
         on_road = k in snap_roads
-        snap_ways = [w for w in ways if (w["tags"]["highway"] in ROAD_HIGHWAYS) == on_road]
+        snap_ways = [w for w in ways if _is_road(w["tags"]["highway"]) == on_road]
         way_nodes = np.array(sorted({n for w in snap_ways for n in w["nodes"]}))
         way_ll = np.array([nodes[n] for n in way_nodes])
         # Snap to the nearest node of the biggest trail network within SNAP_M, so a stub path at a
@@ -269,7 +274,7 @@ def build_graph(osm, roads, max_sac, anchors, extra_ids=(), connectors_m=0.0, cl
         for i in range(1, len(seq)):
             if seq[i] in junctions:
                 ll = np.array([nodes[n] for n in seq[start : i + 1]])
-                is_road = tags["highway"] in ROAD_HIGHWAYS
+                is_road = _is_road(tags["highway"])
                 # Bridges and tunnels: the bare-earth DEM there is the ground below or above, not the way.
                 off_ground = tags.get("bridge", "no") != "no" or tags.get("tunnel", "no") not in ("no", "culvert")
                 edges.append(dict(
@@ -277,7 +282,7 @@ def build_graph(osm, roads, max_sac, anchors, extra_ids=(), connectors_m=0.0, cl
                     roadpt=np.full(len(ll), is_road), flatpt=np.full(len(ll), off_ground),
                     length=float(np.sum(_haversine(ll[:-1, 0], ll[:-1, 1], ll[1:, 0], ll[1:, 1]))),
                     road=is_road, highway=tags["highway"], way=w["id"], surface=tags.get("surface"),
-                    service=tags.get("service"),
+                    service=tags.get("service"), major=tags["highway"] in MAJOR_ROADS,
                 ))
                 start = i
     for a, b in gaps:
@@ -311,6 +316,53 @@ def _drop_closed(ways, closed):
 def load_closures(paths):
     """Closed OSM segments from closure files (JSON with "closed_segments": [[node, node], ...])."""
     return frozenset(frozenset(p) for path in paths for p in json.load(open(path))["closed_segments"])
+
+
+CROSSING_M = 50.0  # road stretches this short joining two trails are crossings, not road walks
+# Traverses may not end at the Mount Washington summit facilities (lat, lon, radius m) or on these roads.
+EXCLUDED_ENDS = [(44.27060, -71.30330, 500.0)]
+EXCLUDED_END_ROADS = {"Mount Washington Auto Road", "Breakneck Road"}
+CLOSURES_DIR = Path(__file__).parent / "closures"
+
+NOT_ROUTES = ("driveway", "parking_aisle", "drive-through")  # service roads nobody runs
+
+
+def road_network(edges, include=frozenset(), link_m=30.0):
+    """Roads only, paved or not (no trails, tracks, driveways or parking aisles), plus the ways in ``include`` whatever
+    their type, each of their dead ends joined to the nearest road node within ``link_m``: the sidewalks the graph
+    leaves out."""
+    out = [e for e in edges if e.get("way") in include
+           or (e["road"] and not e.get("major") and e.get("service") not in NOT_ROUTES)]
+    pos, deg = {}, Counter()
+    for e in out:
+        pos[e["u"]], pos[e["v"]] = e["latlon"][0], e["latlon"][-1]
+        deg[e["u"]] += 1
+        deg[e["v"]] += 1
+    road = sorted({n for e in out if e["road"] for n in (e["u"], e["v"])})
+    xy = np.array([pos[n] for n in road])
+    for e in list(out):
+        if e["road"] or e.get("way") not in include:
+            continue
+        for n in (e["u"], e["v"]):
+            if deg[n] == 1:
+                d = _haversine(*pos[n], xy[:, 0], xy[:, 1])
+                i = int(np.argmin(d))
+                if d[i] <= link_m:
+                    out.append(dict(u=n, v=road[i], latlon=np.array([pos[n], pos[road[i]]]),
+                                    names=np.full(2, "sidewalk", dtype=object), roadpt=np.zeros(2, bool),
+                                    flatpt=np.zeros(2, bool), length=max(float(d[i]), 0.2), road=False))
+    return out
+
+
+def trailhead_roads(edges, starts, max_m):
+    """Ids of the roads (not major ones) lying entirely within ``max_m`` of a start: its parking lots and access
+    roads."""
+    at = {}
+    for e in edges:
+        at[e["u"]], at[e["v"]] = e["latlon"][0], e["latlon"][-1]
+    pts = [at[n] for n in starts if n in at]
+    return {id(e) for e in edges if e["road"] and not e.get("major")
+            and any(np.all(_haversine(e["latlon"][:, 0], e["latlon"][:, 1], *p) <= max_m) for p in pts)}
 
 
 def road_connectors(edges, max_m):
@@ -375,11 +427,11 @@ def _mapping_gaps(ways, nodes, count):
     for wi, w in enumerate(ways):
         for n in w["nodes"]:
             owner.setdefault(n, set()).add(wi)
-            if w["tags"].get("name") and w["tags"]["highway"] not in ROAD_HIGHWAYS:
+            if w["tags"].get("name") and not _is_road(w["tags"]["highway"]):
                 names[n].add(w["tags"]["name"])
             la, lo = nodes[n]
             grid[(int(la / cell), int(lo / cell))].append(n)
-    ends = {n for w in ways if w["tags"]["highway"] not in ROAD_HIGHWAYS
+    ends = {n for w in ways if not _is_road(w["tags"]["highway"])
             for n in (w["nodes"][0], w["nodes"][-1]) if count[n] == 1}
     pairs = set()
     for a in ends:
@@ -673,6 +725,7 @@ def subdivide(edges, seg_max):
         road = e["roadpt"][:-1]
         e["gap"] = (float(fwd.sum()), float(rev.sum()))
         e["gap_road"] = (float(fwd[road].sum()), float(rev[road].sum()))
+        e["road_len"] = float(ds[road].sum())
     return out
 
 
@@ -680,12 +733,13 @@ def subdivide(edges, seg_max):
 
 def solve(edges, starts, ends, budget, topology, min_loop, time_limit, workers, verbose, hint=None,
           min_loop_frac=0.0, road_time_frac=None, start_cost=None, minimize=False, min_length=0.0,
-          no_turnarounds=False, turnaround_ok=()):
+          no_turnarounds=False, turnaround_ok=(), max_road_frac=None):
     """Return (traversal count per edge, start node, end node, proven optimal) for the best route found.
 
     ``topology`` is a TOPOLOGIES entry. Each loop must be at least ``min_loop`` (m) long and at least
     ``min_loop_frac`` of the route's total distance. With ``road_time_frac``, road segments may take at most
-    that share of the route's grade-adjusted time (a segment run once counts both directions' average).
+    that share of the route's grade-adjusted time (a segment run once counts both directions' average); with
+    ``max_road_frac``, at most that share of its distance.
 
     An edge's optional ``cost`` (m) replaces its length in the budget, e.g. grade-adjusted time as flat distance.
 
@@ -879,6 +933,11 @@ def solve(edges, starts, ends, budget, topology, min_loop, time_limit, workers, 
         pct = round(100 * road_time_frac)
         md.Add(100 * sum(r1[e] * (a[e] + 2 * b[e]) for e in range(E))
                <= pct * sum(t1[e] * (a[e] + 2 * b[e]) for e in range(E)))
+    if max_road_frac is not None:
+        rl = [round(e["road_len"]) for e in edges]
+        pct = round(100 * max_road_frac)
+        md.Add(100 * sum(rl[e] * (a[e] + 2 * b[e]) for e in range(E))
+               <= pct * sum(L[e] * (a[e] + 2 * b[e]) for e in range(E)))
     if spurs is not None:
         md.Add(sum(leaves) <= spurs)
 
@@ -1078,10 +1137,23 @@ def main():
     p.add_argument("--roads", action="store_true", help="allow roads as well as trails")
     p.add_argument("--road-time-frac", type=float, metavar="F",
                    help="allow roads, up to this share of the route's grade-adjusted (GAP) time, e.g. 0.1")
+    p.add_argument("--roads-only", action="store_true",
+                   help="roads only, paved or dirt: no trails, tracks, driveways or parking aisles; highways only crossed")
+    p.add_argument("--paved-only", action="store_true", help="leave out roads tagged unpaved (gravel, dirt, ...)")
+    p.add_argument("--ways", metavar="FILE",
+                   help='JSON {"include": [OSM way ids], "exclude": [...]}: ways to allow whatever their type, or to avoid')
+    p.add_argument("--minimize", action="store_true",
+                   help="find the route that climbs the least, covering at least 98%% of --distance")
+    p.add_argument("--trailhead-roads", type=float, default=400.0, metavar="M",
+                   help="roads lying within M meters of the start are walkable: its lots and access roads (default 400)")
+    p.add_argument("--any-end", action="store_true",
+                   help="with --end-trailheads, also allow ends on the Mount Washington Auto Road, at its summit or "
+                        "on Breakneck Road")
     p.add_argument("--closures", action="append", default=[], metavar="FILE",
-                   help="JSON of closed OSM segments to avoid; repeatable")
-    p.add_argument("--road-connectors", type=float, default=0.0, metavar="M",
-                   help="without --roads, still allow road stretches up to M meters that join two trails")
+                   help="JSON of closed OSM segments to avoid, besides those in closures/; repeatable")
+    p.add_argument("--max-road-fraction", type=float, default=0.1, metavar="F",
+                   help="at most this share of the route's distance on roads, e.g. a road walk between trailheads "
+                        "(default 0.1; 0 for trails only). Road crossings and the start's own roads don't count")
     p.add_argument("--max-sac", type=int, choices=range(1, 7), metavar="1-6",
                    help="exclude trails above this SAC scale grade (T1-T6)")
     p.add_argument("--dem", choices=["3dep", "terrarium"], default="3dep", help="elevation source")
@@ -1105,20 +1177,42 @@ def main():
     budget = args.distance * MI_TO_M
     anchors = args.start + (args.end or [])
 
+    if args.roads_only and args.end_trailheads:
+        p.error("--end-trailheads finds trail ends; with --roads-only give --end")
+
     max_sac = None if args.max_sac is None else args.max_sac - 1
-    roads = args.roads or args.road_time_frac is not None
-    fetch_roads = roads or args.road_connectors > 0
+    roads = args.roads or args.roads_only or args.road_time_frac is not None
+    closed = load_closures(sorted(CLOSURES_DIR.glob("*.json")) + args.closures)
+    ways = json.load(open(args.ways)) if args.ways else {}
+    include, exclude = set(ways.get("include", ())), set(ways.get("exclude", ()))
     heads = {}
     if args.end_trailheads:  # the route may end anywhere within the full budget of the start
-        osm = fetch_osm(args.start, budget, fetch_roads)
-        heads = road_trailheads(osm, args.start, budget, args.roads, max_sac, load_closures(args.closures))
+        osm = fetch_osm(args.start, budget, True)
+        heads = road_trailheads(osm, args.start, budget, args.roads, max_sac, closed)
         heads = {n: h for n, h in heads.items()
-                 if min(_haversine(h[0], h[1], la, lo) for la, lo in args.start) >= args.min_end_dist * MI_TO_M}
+                 if min(_haversine(h[0], h[1], la, lo) for la, lo in args.start) >= args.min_end_dist * MI_TO_M
+                 and (args.any_end or (h[2].split(" at ")[-1] not in EXCLUDED_END_ROADS
+                                       and all(_haversine(h[0], h[1], la, lo) > r for la, lo, r in EXCLUDED_ENDS)))}
         print(f"{len(heads)} trailheads at least {args.min_end_dist:g} mi from the start")
     else:
-        osm = fetch_osm(anchors, budget / 2, fetch_roads)
-    edges, anchor_ids = build_graph(osm, roads, max_sac, anchors, extra_ids=heads, connectors_m=args.road_connectors,
-                                    closed=load_closures(args.closures))
+        osm = fetch_osm(anchors, budget / 2, True)
+    if exclude:
+        osm = dict(osm, elements=[el for el in osm["elements"] if not (el["type"] == "way" and el["id"] in exclude)])
+    edges, anchor_ids = build_graph(osm, True, max_sac, anchors, extra_ids=heads, closed=closed,
+                                    snap_roads=range(len(anchors)) if args.roads_only else ())
+    if roads:  # major roads only where they meet others
+        edges = [e for e in edges if not e.get("major")]
+    else:  # trails, and road walks between them; crossings and the start's own roads are free
+        free = {id(e) for e in road_connectors(edges, CROSSING_M) if e["road"]}
+        free |= trailhead_roads(edges, anchor_ids[: len(args.start)], args.trailhead_roads)
+        minor = [e for e in edges if not e.get("major")]
+        walks = {id(e) for e in road_connectors(minor, args.max_road_fraction * budget)}
+        edges = [dict(e, roadpt=np.zeros_like(e["roadpt"])) if id(e) in free else e
+                 for e in edges if id(e) in free | walks]
+    if args.paved_only:
+        edges = [e for e in edges if not (e["road"] and e.get("surface") in UNPAVED)]
+    if args.roads_only:
+        edges = road_network(edges, include)
     if args.road_time_frac is not None:
         edges = road_connectors(edges, args.road_time_frac * budget / ROAD_GAP_MIN)
     starts = anchor_ids[: len(args.start)]
@@ -1129,7 +1223,9 @@ def main():
 
     m, start, end, _ = solve(edges, starts, ends, budget, topology, args.min_loop * MI_TO_M,
                              args.time_limit, args.workers, args.verbose, min_loop_frac=args.min_loop_frac,
-                             road_time_frac=args.road_time_frac)
+                             road_time_frac=args.road_time_frac, minimize=args.minimize,
+                             max_road_frac=None if roads else args.max_road_fraction,
+                             min_length=0.98 * budget if args.minimize else 0.0)
     route = assemble(edges, m, start, end)
     shape, details = classify(edges, m, start, end, args.min_loop * MI_TO_M, args.min_loop_frac)
 

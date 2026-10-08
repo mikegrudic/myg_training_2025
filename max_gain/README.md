@@ -43,12 +43,31 @@ so a second run near the same start is much faster.
 
    ```
    python max_gain_route.py --start 44.21787,-71.41128 --distance 20 --topology lollipop \
-       --closures closures/abandoned_ways_2026-10.json -o crawford.gpx --plot crawford.png
+       -o crawford.gpx --plot crawford.png
    ```
 
    It prints the shape, the distance, the gain and a turn-by-turn list of trails, then writes the GPX and, with
-   `--plot`, a map and elevation profile. This one finds about 8,300 ft in 20 mi, on the Crawford Path, Dry River and
-   Webster Cliff trails.
+   `--plot`, a map and elevation profile.
+
+   Another: the Burroughs Range loop from Woodland Valley, over Wittenberg, Cornell and Slide, with a walk on
+   Oliverea Road back to the Phoenicia-East Branch Trail:
+
+   ```
+   python max_gain_route.py --start 42.03545,-74.35961 --distance 16 --topology loop
+   ```
+
+### The rules it follows
+
+By default it plays by the same rules as the published survey:
+
+- **Trails**, with up to 10% of the distance on roads (`--max-road-fraction`), for walks between trailheads.
+  Road crossings of up to 50 m and the roads within 400 m of the start (its parking lots and access roads) don't
+  count toward that. Highways (OSM primary and trunk) can be crossed but not followed.
+- **Closed segments** in `closures/` are avoided: closed trails and roads (such as NY 9D at Breakneck), and abandoned
+  trails still in OSM.
+- **Traverses** with `--end-trailheads` don't end on the Mount Washington Auto Road, at the Mount Washington summit,
+  or on Breakneck Road (NY 9D).
+- **Loops** are at least 1 mi and a quarter of the route long, and a traverse ends at least 1 mi from its start.
 
 ### Useful options
 
@@ -56,12 +75,18 @@ so a second run near the same start is much faster.
 |--------|--------------|
 | `-o FILE.gpx` | Where to write the route (default `max_gain_route.gpx`) |
 | `--plot FILE.png` | Also draw a map and elevation profile |
-| `--roads` | Allow roads as well as trails |
-| `--road-connectors M` | Stay on trails, but allow road stretches up to M meters that join two trails, such as a walk along a highway between trailheads |
+| `--roads` | Allow roads as well as trails, any amount |
+| `--roads-only` | Roads only, paved or dirt: no trails, tracks, driveways or parking aisles. Highways (OSM primary and trunk) can be crossed but not followed |
+| `--paved-only` | Leave out roads tagged as unpaved (gravel, dirt, ...). Many roads have no surface tag; those count as paved |
+| `--ways FILE` | Add or exclude particular OSM ways (see Road runs below) |
+| `--minimize` | Find the flattest route instead, covering at least 98% of `--distance` |
+| `--max-road-fraction F` | At most this share of the distance on roads (default 0.1; 0 for trails only) |
+| `--trailhead-roads M` | Walkable roads around the start, in meters (default 400; 0 for none) |
+| `--any-end` | Allow traverses to end on the Mount Washington Auto Road, at its summit, or on Breakneck Road |
 | `--time-limit S` | Seconds to search (default 120). Give long routes, or `figure-8`, `dumbbell` and `any`, 600 or more |
 | `--end LAT,LON` | Finish here (with `--topology traverse`) |
 | `--end-trailheads` | Finish at whichever trailhead gives the most gain (with `--topology traverse`) |
-| `--closures FILE` | Avoid closed trail segments listed in FILE; repeat for each file in `closures/` |
+| `--closures FILE` | Also avoid the closed segments listed in FILE (format as in `closures/`) |
 | `--max-sac N` | Skip trails rated harder than SAC grade TN (1-6) |
 | `--start` again | Give several starts; the solver uses whichever is best |
 
@@ -75,6 +100,26 @@ so a second run near the same start is much faster.
   `--time-limit` sometimes finds more.
 - **If it prints "requested X but the route is a Y"**, the best route it found has a simpler shape, for example
   a lollipop whose loop shrank away. Try another shape, or a different distance.
+
+## Road runs
+
+`--roads-only` plans a run on streets. OSM sorts ways by type, not surface: `highway=track` (most forest and farm
+roads) counts as a trail and is left out, while a gravel town road counts as a road and is kept unless you add
+`--paved-only`.
+
+A `--ways` file fine-tunes the network: `include` adds ways of any type (a cemetery lane, a pedestrian tunnel), and
+`exclude` drops ways (a private drive). Way ids come from openstreetmap.org: click a way and read the id from the URL.
+Dead ends of included paths are joined to the nearest street within 30 m, since the graph leaves out sidewalks.
+`networks/cold_spring_road_runs.json` is the Cold Spring setup: the cemetery lanes and the Main Street tunnel, without
+the private drives.
+
+```
+# the hilliest 10K loop from the Cold Spring bandstand, then the flattest
+python max_gain_route.py --start 41.41602,-73.96122 --roads-only --ways networks/cold_spring_road_runs.json \
+    --distance 6.214 --topology loop -o cs_hilly.gpx
+python max_gain_route.py --start 41.41602,-73.96122 --roads-only --ways networks/cold_spring_road_runs.json \
+    --distance 6.214 --topology loop --minimize -o cs_flat.gpx
+```
 
 ## Add summit side trips to a route
 
@@ -96,5 +141,5 @@ summits. If it warns that the matched length is off, which can happen with a noi
 |---------|------------|
 | `All Overpass servers failed` | The OpenStreetMap servers are busy. Try again in a few minutes |
 | HTTP 504 from the USGS elevation service | Add `--dem terrarium` to use AWS terrain tiles instead |
-| `No feasible route found` | No route of that shape fits the distance on trails alone. A loop often needs a short road link between two trailheads: add `--road-connectors 400`. Otherwise try more miles or another shape |
+| `No feasible route found` | No route of that shape fits the distance. A loop may need a longer road walk between trailheads: raise `--max-road-fraction`. Otherwise try more miles or another shape |
 | A start snapped hundreds of meters away | The point isn't near a mapped trail. Move it onto the trail |

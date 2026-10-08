@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Max-Gain Trail Routes</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -9,7 +10,7 @@
   --ink: #1b2420;
   --muted: #5a6961;
   --rule: #d6ddd7;
-  --net: #b9c3bc;
+  --net: #9da8a1;
   --mark: #1b2420;
   --race: #e7ebe4;
   --c-loop: #2a78d6;
@@ -34,7 +35,7 @@
     --ink: #e6ece8;
     --muted: #97a69e;
     --rule: #2b3430;
-    --net: #3a4540;
+    --net: #6b7a73;
     --mark: #e6ece8;
     --race: #1e2622;
     --c-loop: #3987e5;
@@ -58,7 +59,7 @@
   --ink: #e6ece8;
   --muted: #97a69e;
   --rule: #2b3430;
-  --net: #3a4540;
+  --net: #6b7a73;
   --mark: #e6ece8;
   --race: #1e2622;
   --c-loop: #3987e5;
@@ -223,7 +224,6 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
   </div>
 </dialog>
 
-<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs><symbol id="net" overflow="visible"><path id="net-path" fill="none" stroke="var(--net)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/></symbol></defs></svg>
 
 <script type="application/json" id="data">__DATA__</script>
 <script>
@@ -271,7 +271,7 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     return out;
   }
 
-  let site = null, cells = {}, P = null, TH = null, current = null;
+  let site = null, cells = {}, P = null, TH = null, current = null, NET = [];
 
   function mapSVG(c, cls) {
     const pts = c.pts;
@@ -284,9 +284,12 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     const d = "M" + pts.map(p => p[0].toFixed(5) + " " + p[1].toFixed(5)).join("L");
     const r = bw * 0.018;
     const end = c.endll ? P(c.endll) : null;
+    // Only the network segments in view, drawn in this map (WebKit drops a large shared <use> network).
+    const netD = NET.filter(s => s.x1 >= vb[0] && s.x0 <= vb[0] + vb[2] && s.y1 >= vb[1] && s.y0 <= vb[1] + vb[3])
+      .map(s => "M" + s.q.map(p => p[0].toFixed(5) + " " + p[1].toFixed(5)).join("L")).join("");
     return `<svg class="${cls}" viewBox="${vb.map(v => v.toFixed(5)).join(" ")}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(NAME[c.t])} route map, ${c.dist} miles">
       <rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="var(--surface)"/>
-      <use href="#net"/>
+      ${netD ? `<path d="${netD}" fill="none" stroke="var(--net)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>` : ""}
       <path d="${d}" fill="none" stroke="var(--surface)" stroke-width="5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
       <path d="${d}" fill="none" stroke="${color(c.t)}" stroke-width="2.25" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
       <circle cx="${pts[0][0]}" cy="${pts[0][1]}" r="${r}" fill="var(--surface)" stroke="var(--mark)" stroke-width="2" vector-effect="non-scaling-stroke"/>
@@ -326,8 +329,11 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     const kx = Math.cos(site.trailhead[0] * Math.PI / 180);
     P = ([la, lo]) => [lo * kx, -la];
     TH = P(site.trailhead);
-    document.getElementById("net-path").setAttribute("d",
-      site.net.split(" ").map(e => "M" + decodeColumns(e, 1e5).map(p => P(p).map(v => v.toFixed(5)).join(" ")).join("L")).join(""));
+    NET = site.net.split(" ").map(e => {
+      const q = decodeColumns(e, 1e5).map(P);
+      const xs = q.map(p => p[0]), ys = q.map(p => p[1]);
+      return { q, x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+    });
     cells = {};
     for (const c of site.cells) {
       if (!c.none && !c.pts) {

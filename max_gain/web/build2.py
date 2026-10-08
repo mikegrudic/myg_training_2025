@@ -149,21 +149,27 @@ for slug in ORDER:
         if "end_latlon" in c:
             o["endll"] = c["end_latlon"]
         out_cells.append(o)
-    # A route that fits a shorter row fits every longer one, so a longer row never shows less gain: where the solver
-    # did worse (or found nothing in time), carry the best shorter route forward.
-    order = {label: i for i, (_, label) in enumerate(ROWS)}
-    by_key = {o["key"]: i for i, o in enumerate(out_cells)}
+    # Each row shows the best route of its shape, found for any row, whose actual distance is within the row's
+    # budget and no more than a mile short of it; with none such, the row is blank.
+    tracks = dict(routes)  # as found: a blanked row's route may still fill a shorter row
     for t in ({o["t"] for o in out_cells} if not FLAT else ()):
-        best = None
-        for o in sorted((o for o in out_cells if o["t"] == t), key=lambda o: order[o["b"]]):
-            if best and ("none" in o or o["gain"] < best["gain"]):
+        found = [o for o in out_cells if o["t"] == t and "none" not in o]
+        for i, o in enumerate(out_cells):
+            if o["t"] != t:
+                continue
+            fits = [f for f in found if o["mi"] - 1.0 <= f["dist"] <= o["mi"] + 0.006]
+            if not fits:
+                if "none" not in o:
+                    out_cells[i] = dict(t=o["t"], b=o["b"], mi=o["mi"], key=o["key"], none=True)
+                    routes.pop(o["key"], None)
+                continue
+            best = max(fits, key=lambda f: f["gain"])
+            if best is not o and ("none" in o or best["gain"] > o["gain"]):
                 c = {k: v for k, v in best.items() if k not in ("b", "mi", "key")}
                 c.update(b=o["b"], mi=o["mi"], key=o["key"], proven=False,
-                         details=f"{best['details']}; same route as the {best['b']} mi row")
-                out_cells[by_key[o["key"]]] = c
-                routes[o["key"]] = routes[best["key"]]
-            elif "none" not in o:
-                best = o
+                         details=f"{best['details']}; same route as the {best['b']}{'' if best['b'] in race_labels else ' mi'} row")
+                out_cells[i] = c
+                routes[o["key"]] = tracks[best["key"]]
     payload = json.dumps(routes, separators=(",", ":"))
     open(f"{PAGE}/routes/{slug}.json", "w").write(payload)
     open(f"{PAGE}/routes/{slug}.js", "w").write(f"window.__ROUTES__=window.__ROUTES__||{{}};window.__ROUTES__[{json.dumps(slug)}]={payload};\n")

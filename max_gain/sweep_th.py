@@ -10,7 +10,7 @@ import networkx as nx, numpy as np, max_gain_route as mg
 
 OUT = os.environ.get("MAX_GAIN_OUT", os.path.join(os.path.dirname(os.path.abspath(__file__)), "web", "sites"))
 ROAD_TIME_FRAC = 0.10  # roads may take up to this share of a route's grade-adjusted time
-CLOSED = mg.load_closures(sorted(glob.glob(os.path.join(os.path.dirname(mg.__file__), "closures", "*.json"))))
+CLOSED = mg.load_closures(sorted(mg.CLOSURES_DIR.glob("*.json")))
 TRAILHEADS = {
     "washburn": ("Washburn Trailhead", "Cold Spring, NY", (41.42698, -73.96568)),
     "prediger": ("Prediger Road Trailhead", "Catskills, Hunter, NY", (42.13410, -74.10425)),
@@ -651,7 +651,7 @@ def lollipop_seed(sub, start, budget, workers, stem_max=800.0, tries=8, limit=10
                 m, *_ = mg.solve(rest, [end], None, budget - 2 * dist[end], mg.TOPOLOGIES["loop"], min_loop, limit,
                                  workers, False, minimize=min_length > 0,
                                  min_length=max(min_length - 2 * dist[end], 0.0))
-        except SystemExit:
+        except (SystemExit, mg.VertmaxxerError):
             ks = None if min_length else cycle_seed(rest, end, min_loop, budget - 2 * dist[end])
             if ks is None:
                 continue
@@ -924,7 +924,7 @@ def job(spec):
                         mt, *_ = mg.solve(trail, starts, ends, budget, topo, MIN_LOOP, WARM_LIMIT, workers, False,
                                           min_loop_frac=MIN_LOOP_FRAC, start_cost=costs)
                         prev = {ekey(trail[i]): mt[i] for i in range(len(trail))}
-                    except SystemExit:
+                    except (SystemExit, mg.VertmaxxerError):
                         pass
                 hint = np.array([prev.get(ekey(e), 0) for e in sub])
                 m, s, e, proven = mg.solve(sub, starts, ends, budget, topo, MIN_LOOP, TIME_LIMIT, workers, False,
@@ -948,7 +948,7 @@ def job(spec):
                         full_m.append(0)
                     full_m[pos[id(x)]] += 1 if o.get("link") is not None else mult
                 route = mg.assemble(full_edges, np.array(full_m), ids[0], e if p2p else ids[0])
-        except SystemExit as err:
+        except (SystemExit, mg.VertmaxxerError) as err:
             cell["none"] = str(err)
             json.dump(cell, open(f"{OUT}/{slug}/cells/{name}_{label}.json", "w"))
             print(f"{slug:15s} {name:14s} {label:>8s}: none ({'not found in time' if 'UNKNOWN' in str(err) else 'infeasible'})", flush=True)

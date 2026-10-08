@@ -2,7 +2,7 @@
 on ties). Routes over the closed 9D stretch at Breakneck or an abandoned way are dropped."""
 import glob, json, os, re, shutil, sys
 import numpy as np
-CLOSURES = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "closures")
+from vertmaxxer.core import CLOSURES_DIR as CLOSURES
 flags = {a for a in sys.argv[1:] if a.startswith("--")}
 LOWEST = "--lowest" in flags  # keep the flattest valid route per cell instead
 ROAD_RUNS = "--road-runs" in flags  # also reject the road-run exclusions (Manitou campus, Foundry Preserve climbs)

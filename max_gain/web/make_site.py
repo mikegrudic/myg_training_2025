@@ -10,7 +10,7 @@ TITLE = "Combinatorial vertmaxxing"
 ABSTRACT = ("Do it for the vert. These are routes generated to have the highest known vertical gain for a given "
             "distance from a chosen starting point, with various choices for the topology of the route. Some of these "
             "are proven optimal, while some may have room for improvement.")
-ABSTRACT2 = "These vert figures are smoothed to 50 m, and tend to be conservative compared to what might show up on your watch — do not underestimate them. For comparison, our vert measure gives 4,600 ft for the Escarpment Trail Run, 8,000 ft for the Devil's Path, 8,800 ft for the Great Range Traverse, and 8,100 ft for the Presidential Traverse."
+ABSTRACT2 = "These vert figures are smoothed to 50 m, and tend to be conservative compared to what might show up on your watch — do not underestimate them. For comparison, our vert measure gives 4,600 ft (1,400 m) for the Escarpment Trail Run, 8,000 ft (2,440 m) for the Devil's Path, 8,800 ft (2,680 m) for the Great Range Traverse, and 8,100 ft (2,470 m) for the Presidential Traverse."
 HEAD_CSS = """.site-head { padding: 8px 0 18px; margin-bottom: 14px; border-bottom: 1px solid var(--rule); }
 .site-head h1 { font-size: clamp(34px, 6vw, 56px); margin: 0 0 8px; }
 .site-head p { max-width: 70ch; margin: 0 0 8px; font-size: 17px; color: var(--muted); }

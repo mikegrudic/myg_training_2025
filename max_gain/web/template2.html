@@ -97,6 +97,9 @@ h1 { font-size: clamp(30px, 5vw, 46px); line-height: 1.02; margin: 4px 0 10px; f
 .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 18px; }
 .btn { appearance: none; border: 1px solid var(--ink); background: var(--ink); color: var(--paper); font-size: 15px; font-weight: 600; letter-spacing: .02em; padding: 6px 14px; border-radius: 3px; cursor: pointer; }
 .btn.ghost { background: transparent; color: var(--ink); border-color: var(--rule); }
+.units { display: inline-flex; border: 1px solid var(--rule); border-radius: 999px; overflow: hidden; font-size: 14px; vertical-align: middle; }
+.units button { appearance: none; border: 0; background: transparent; color: var(--muted); padding: 5px 12px; cursor: pointer; font: inherit; }
+.units button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
 .btn:hover { filter: brightness(1.1); }
 .btn.ghost:hover { border-color: var(--ink); }
 .btn:focus-visible, .cell:focus-visible, .pt:focus-visible, .site:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
@@ -175,13 +178,14 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
         <dt>Solver</dt><dd>OR-Tools CP-SAT; “optimal” means proven</dd>
       </dl>
       <div class="actions">
+        <span class="units" role="group" aria-label="Units"><button type="button" data-units="imperial">mi · ft</button><button type="button" data-units="metric">km · m</button></span>
         <button class="btn" id="all" type="button">Download all GPX for this trailhead</button>
         <span class="status" id="all-status"></span>
       </div>
     </div>
     <figure class="chart-card">
       <h2>Climbing rate by distance</h2>
-      <p class="sub">Feet of gain per mile of the route against the distance budget. Hollow points are the best found within the time limit, not proven optimal.</p>
+      <p class="sub"><span id="rate-units">Feet of gain per mile</span> of the route against the distance budget. Hollow points are the best found within the time limit, not proven optimal.</p>
       <div id="chart"></div>
       <ul class="legend" id="legend"></ul>
     </figure>
@@ -242,6 +246,15 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
   const MEDALS = { 1: "gold", 2: "silver", 3: "bronze" };
   const color = t => `var(--c-${t})`;
   const fmt = n => n.toLocaleString("en-US");
+  // Units: the data are in miles and feet; with metric on, everything shown is converted to km and m.
+  let METRIC = false;
+  try { METRIC = localStorage.getItem("units") === "metric"; } catch (e) {}
+  const KM = 1.609344, FT = 3.280839895;
+  const D = mi => METRIC ? mi * KM : mi, Z = ft => METRIC ? ft / FT : ft;
+  const DU = () => METRIC ? "km" : "mi", ZU = () => METRIC ? "m" : "ft", RU = () => `${ZU()}/${DU()}`;
+  const fz = ft => fmt(Math.round(Z(ft))), fd = mi => D(mi).toFixed(2), rateOf = c => Z(c.gain) / D(c.dist);
+  const unitText = s => METRIC ? s.replace(/(\d+(?:\.\d+)?) mi\b/g, (_, x) => `${(x * KM).toFixed(2)} km`) : s;
+  const budgetText = (label, mi, race) => race ? label : METRIC ? `${(mi * KM).toFixed(1)} km` : `${label} miles`;
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
   // Polyline decoding (Google's algorithm): flat int deltas, or interleaved pairs scaled by `scale`.
@@ -356,8 +369,8 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
       ${end ? `<rect x="${(end[0] - r).toFixed(1)}" y="${(end[1] - r).toFixed(1)}" width="${2 * r}" height="${2 * r}" fill="var(--mark)" stroke="var(--surface)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
     </svg>`;
   }
-  const detailText = c => c.t !== "loop" ? c.details
-    : "Single loop, no repeated trail" + (c.details.includes(";") ? ";" + c.details.split(";").slice(1).join(";") : "");
+  const detailText = c => unitText(c.t !== "loop" ? c.details
+    : "Single loop, no repeated trail" + (c.details.includes(";") ? ";" + c.details.split(";").slice(1).join(";") : ""));
   function sparkSVG(c) {
     const pr = c.prof, W = 200, H = 26, dmax = pr[pr.length - 1][0], zmax = site.zmax;
     const pts = pr.map(([d, z]) => [(d / dmax) * W, H - 1 - (z / zmax) * (H - 2)]);
@@ -413,7 +426,8 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     for (const { mi, label, race } of DATA.budgets) {
       const tr = document.createElement("tr");
       if (race) tr.className = "race";
-      tr.innerHTML = race ? `<td class="budget">${label}<small>${mi.toFixed(2)} MI</small></td>` : `<td class="budget">${label}<small>MILES</small></td>`;
+      tr.innerHTML = race ? `<td class="budget">${label}<small>${D(mi).toFixed(2)} ${DU().toUpperCase()}</small></td>`
+        : METRIC ? `<td class="budget">${D(mi).toFixed(1)}<small>KM</small></td>` : `<td class="budget">${label}<small>MILES</small></td>`;
       const gains = TOPOS.map(([t]) => cells[`${t}_${label}`]).filter(c => c && !c.none).map(c => c.gain);
       const rankOf = g => 1 + gains.filter(x => DATA.minimize ? x < g : x > g).length;
       for (const [t] of TOPOS) {
@@ -421,14 +435,14 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
         const c = cells[`${t}_${label}`];
         if (!c) td.innerHTML = `<div class="pending">Not computed</div>`;
         else if (c.none === "timeout") td.innerHTML = `<div class="none">None found in 120 s.</div>`;
-        else if (c.none) td.innerHTML = `<div class="none">No ${NAME[t].toLowerCase()} fits in ${race ? label : label + " miles"}.</div>`;
+        else if (c.none) td.innerHTML = `<div class="none">No ${NAME[t].toLowerCase()} fits in ${budgetText(label, mi, race)}.</div>`;
         else {
           const rank = rankOf(c.gain), medal = MEDALS[rank];
           td.innerHTML = `<div class="cell${medal ? ` medal rank${rank}` : ""}" tabindex="0" role="button" data-key="${t}_${label}"
-              aria-label="${NAME[t]}, ${race ? label : label + " mile"} budget: ${fmt(c.gain)} feet over ${c.dist} miles${medal ? `, ${medal}` : ""}. Open details.">
+              aria-label="${NAME[t]}, ${budgetText(label, mi, race)} budget: ${fz(c.gain)} ${METRIC ? "meters" : "feet"} over ${fd(c.dist)} ${METRIC ? "kilometers" : "miles"}${medal ? `, ${medal}` : ""}. Open details.">
             ${mapSVG(c, "map")}
             ${sparkSVG(c)}
-            <div class="stats"><span class="gain">${fmt(c.gain)}<small> ft</small></span><span class="dist">${c.dist.toFixed(2)} mi · ${fmt(Math.round(c.gain / c.dist))} ft/mi</span></div>
+            <div class="stats"><span class="gain">${fz(c.gain)}<small> ${ZU()}</small></span><span class="dist">${fd(c.dist)} ${DU()} · ${fmt(Math.round(rateOf(c)))} ${RU()}</span></div>
             <div class="detail-line">${esc(detailText(c))}</div>
             <div class="chips"><span class="chip${c.proven ? " proven" : ""}">${c.proven ? "Optimal" : "Best found"}</span></div>
           </div>`;
@@ -443,30 +457,31 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
   function renderChart() {
     const W = 560, H = 300, m = { l: 48, r: 12, t: 18, b: 30 };
     const all = site.cells.filter(c => !c.none);
-    const rate = c => c.gain / c.dist, step = 100;
+    const rate = rateOf, step = METRIC ? 20 : 100;
     const ymax = Math.ceil(Math.max(...all.map(rate)) / step) * step;
     const ymin = Math.floor(Math.min(...all.map(rate)) / step) * step;
     const bx0 = DATA.budgets[0].mi, bx1 = DATA.budgets[DATA.budgets.length - 1].mi;
     const X = b => m.l + (b - bx0) / (bx1 - bx0) * (W - m.l - m.r);
     const Y = g => H - m.b - (g - ymin) / Math.max(ymax - ymin, step) * (H - m.t - m.b);
-    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Feet of gain per mile against distance budget for each route shape">`;
-    s += `<text x="${m.l - 6}" y="${m.t - 6}" text-anchor="end">ft/mi</text>`;
+    let s = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Gain per ${METRIC ? "kilometer" : "mile"} against distance budget for each route shape">`;
+    s += `<text x="${m.l - 6}" y="${m.t - 6}" text-anchor="end">${RU()}</text>`;
     for (let g = ymin; g <= ymax; g += step) {
       s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(g)}" y2="${Y(g)}" stroke="var(--rule)" stroke-width="1"/>`;
       s += `<text x="${m.l - 6}" y="${Y(g) + 4}" text-anchor="end">${fmt(g)}</text>`;
     }
-    for (let b = Math.ceil(bx0); b <= bx1; b += 1) {
-      if (b % 5 === 0 || b === Math.ceil(bx0)) s += `<text x="${X(b)}" y="${H - m.b + 16}" text-anchor="middle">${b} mi</text>`;
+    for (let b = Math.ceil(D(bx0)); b <= D(bx1); b += 1) {  // ticks in the chosen unit, placed in miles
+      if (b % 5 === 0 || b === Math.ceil(D(bx0))) s += `<text x="${X(b / D(1))}" y="${H - m.b + 16}" text-anchor="middle">${b} ${DU()}</text>`;
     }
     for (const [t] of TOPOS) {
       const cs = DATA.budgets.map(b => cells[`${t}_${b.label}`]).filter(c => c && !c.none);
       if (!cs.length) continue;
       s += `<path d="${cs.map((c, i) => (i ? "L" : "M") + X(c.mi).toFixed(1) + " " + Y(rate(c)).toFixed(1)).join("")}" fill="none" stroke="${color(t)}" stroke-width="2" stroke-linejoin="round"/>`;
       for (const c of cs) {
-        s += `<circle class="pt" tabindex="0" role="button" data-key="${t}_${c.b}" cx="${X(c.mi)}" cy="${Y(rate(c))}" r="4" fill="${c.proven ? color(t) : "var(--surface)"}" stroke="${color(t)}" stroke-width="1.75" style="cursor:pointer"><title>${NAME[t]}, ${c.b}${/^\d+$/.test(c.b) ? " mi" : ""} budget: ${fmt(Math.round(rate(c)))} ft/mi (${fmt(c.gain)} ft over ${c.dist} mi)${c.proven ? " (optimal)" : " (best found)"}</title></circle>`;
+        s += `<circle class="pt" tabindex="0" role="button" data-key="${t}_${c.b}" cx="${X(c.mi)}" cy="${Y(rate(c))}" r="4" fill="${c.proven ? color(t) : "var(--surface)"}" stroke="${color(t)}" stroke-width="1.75" style="cursor:pointer"><title>${NAME[t]}, ${budgetText(c.b, c.mi, !/^\d+$/.test(c.b))} budget: ${fmt(Math.round(rate(c)))} ${RU()} (${fz(c.gain)} ${ZU()} over ${fd(c.dist)} ${DU()})${c.proven ? " (optimal)" : " (best found)"}</title></circle>`;
       }
     }
     document.getElementById("chart").innerHTML = s + `</svg>`;
+    document.getElementById("rate-units").textContent = METRIC ? "Meters of gain per kilometer" : "Feet of gain per mile";
   }
 
   // Site buttons
@@ -478,35 +493,35 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
   const dlg = document.getElementById("dlg");
   function profileSVG(c) {
     const W = 560, H = 190, m = { l: 46, r: 10, t: 8, b: 26 };
-    const pr = c.prof, dmax = pr[pr.length - 1][0];
-    const zmax = Math.ceil(site.zmax / 500) * 500;
+    const pr = c.prof.map(([d, z]) => [D(d), Z(z)]), dmax = pr[pr.length - 1][0];
+    const zstep = METRIC ? 100 : 500, zmax = Math.ceil(Z(site.zmax) / zstep) * zstep;
     const X = d => m.l + d / dmax * (W - m.l - m.r), Y = z => H - m.b - z / zmax * (H - m.t - m.b);
     let s = `<svg class="profile" viewBox="0 0 ${W} ${H}" role="img" aria-label="Elevation profile">`;
-    for (let z = 0; z <= zmax; z += 500) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(z)}" y2="${Y(z)}" stroke="var(--rule)"/><text x="${m.l - 6}" y="${Y(z) + 4}" text-anchor="end">${fmt(z)}</text>`;
+    for (let z = 0; z <= zmax; z += zstep) s += `<line x1="${m.l}" x2="${W - m.r}" y1="${Y(z)}" y2="${Y(z)}" stroke="var(--rule)"/><text x="${m.l - 6}" y="${Y(z) + 4}" text-anchor="end">${fmt(z)}</text>`;
     const stepx = dmax > 16 ? 4 : dmax > 8 ? 2 : 1;
-    for (let d = 0; d <= dmax + 1e-9; d += stepx) s += `<text x="${X(d)}" y="${H - m.b + 16}" text-anchor="middle">${d} mi</text>`;
+    for (let d = 0; d <= dmax + 1e-9; d += stepx) s += `<text x="${X(d)}" y="${H - m.b + 16}" text-anchor="middle">${d} ${DU()}</text>`;
     const line = "M" + pr.map(([d, z]) => X(d).toFixed(1) + " " + Y(z).toFixed(1)).join("L");
     s += `<path d="${line}L${X(dmax)} ${Y(0)}L${X(0)} ${Y(0)}Z" fill="${color(c.t)}" fill-opacity=".14"/>`;
     s += `<path d="${line}" fill="none" stroke="${color(c.t)}" stroke-width="2" stroke-linejoin="round"/>`;
-    return s + `<text x="${W - m.r}" y="${m.t + 10}" text-anchor="end">feet</text></svg>`;
+    return s + `<text x="${W - m.r}" y="${m.t + 10}" text-anchor="end">${METRIC ? "meters" : "feet"}</text></svg>`;
   }
   function open(key) {
     const c = cells[key];
     if (!c || c.none) return;
     current = c;
-    const budget = /^\d+$/.test(c.b) ? `${c.b}-mile budget` : `${c.b} (${c.mi} mi)`;
+    const budget = /^\d+$/.test(c.b) ? (METRIC ? `${D(c.mi).toFixed(1)} km budget` : `${c.b}-mile budget`) : `${c.b} (${fd(c.mi)} ${DU()})`;
     document.getElementById("dlg-title").textContent = `${NAME[c.t]}, ${budget}`;
     document.getElementById("dlg-sub").textContent = `${site.title}. ${detailText(c)}`;
     document.getElementById("dlg-map").innerHTML = mapSVG(c, "map");
     fillNet(document.querySelector("#dlg-map g.net"), true);
     document.getElementById("dlg-profile").innerHTML = profileSVG(c);
     document.getElementById("dlg-kv").innerHTML = [
-      ["Gain", `${fmt(c.gain)} ft`], ["Distance", `${c.dist.toFixed(2)} mi`], ["Rate", `${fmt(Math.round(c.gain / c.dist))} ft/mi`],
-      ["Unsmoothed gain", `${fmt(c.raw)} ft`], ["High point", `${fmt(c.high)} ft`], ["Solve time", `${c.solve} s`],
+      ["Gain", `${fz(c.gain)} ${ZU()}`], ["Distance", `${fd(c.dist)} ${DU()}`], ["Rate", `${fmt(Math.round(rateOf(c)))} ${RU()}`],
+      ["Unsmoothed gain", `${fz(c.raw)} ${ZU()}`], ["High point", `${fz(c.high)} ${ZU()}`], ["Solve time", `${c.solve} s`],
     ].map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("");
     document.getElementById("dlg-chips").innerHTML = `<span class="chip${c.proven ? " proven" : ""}">${c.proven ? "Proven optimal" : "Best found (not proven optimal)"}</span>`;
     document.getElementById("dlg-peaks").textContent = c.peaks && c.peaks.length ? `Over: ${c.peaks.join(", ")}` : "";
-    document.getElementById("dlg-legs").innerHTML = c.legs.map(([n, mi]) => `<li><span class="mi">${mi.toFixed(2)} mi</span><span>${esc(n)}</span></li>`).join("");
+    document.getElementById("dlg-legs").innerHTML = c.legs.map(([n, mi]) => `<li><span class="mi">${fd(mi)} ${DU()}</span><span>${esc(n)}</span></li>`).join("");
     document.getElementById("dlg-status").textContent = "";
     if (!dlg.open) dlg.showModal();
   }
@@ -516,6 +531,19 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     if (el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); open(el.dataset.key); }
   });
   document.getElementById("dlg-close").addEventListener("click", () => dlg.close());
+
+  // Units toggle, remembered in this browser.
+  const unitButtons = document.querySelectorAll(".units button");
+  const showUnits = () => unitButtons.forEach(b => b.setAttribute("aria-pressed", String((b.dataset.units === "metric") === METRIC)));
+  showUnits();
+  unitButtons.forEach(b => b.addEventListener("click", () => {
+    METRIC = b.dataset.units === "metric";
+    try { localStorage.setItem("units", b.dataset.units); } catch (e) {}
+    showUnits();
+    renderGrid();
+    renderChart();
+    if (dlg.open && current) open(`${current.t}_${current.b}`);
+  }));
   dlg.addEventListener("click", e => { if (e.target === dlg) dlg.close(); });
 
   // Full-resolution tracks: routes/<slug>.json online; routes/<slug>.js from a saved copy (file:// can't fetch).

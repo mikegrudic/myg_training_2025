@@ -273,6 +273,67 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
 
   let site = null, cells = {}, P = null, TH = null, current = null, NET = [];
 
+  function rdp(q, tol) {  // Douglas-Peucker simplification of [x, y] points
+    if (q.length < 3) return q;
+    const keep = new Uint8Array(q.length);
+    keep[0] = keep[q.length - 1] = 1;
+    const stack = [[0, q.length - 1]];
+    while (stack.length) {
+      const [i, j] = stack.pop();
+      const [ax, ay] = q[i], dx = q[j][0] - ax, dy = q[j][1] - ay, L = dx * dx + dy * dy;
+      let best = -1, bd = tol * tol;
+      for (let k = i + 1; k < j; k++) {
+        const t = L ? Math.max(0, Math.min(1, ((q[k][0] - ax) * dx + (q[k][1] - ay) * dy) / L)) : 0;
+        const ex = ax + t * dx - q[k][0], ey = ay + t * dy - q[k][1], d2 = ex * ex + ey * ey;
+        if (d2 > bd) { bd = d2; best = k; }
+      }
+      if (best >= 0) { keep[best] = 1; stack.push([i, best], [best, j]); }
+    }
+    return q.filter((_, k) => keep[k]);
+  }
+  function lod(s, tol) {  // a network segment simplified to about tol (map units), cached per level
+    const k = Math.max(0, Math.floor(Math.log2(tol / 1e-5) / 2));
+    s.lod = s.lod || [];
+    return s.lod[k] || (s.lod[k] = rdp(s.q, 1e-5 * 4 ** k));
+  }
+  function clipLine(a, b, r) {  // Liang-Barsky: the part of segment a-b inside rect r = [x0, y0, x1, y1], or null
+    let t0 = 0, t1 = 1;
+    const dx = b[0] - a[0], dy = b[1] - a[1];
+    for (const [p, q] of [[-dx, a[0] - r[0]], [dx, r[2] - a[0]], [-dy, a[1] - r[1]], [dy, r[3] - a[1]]]) {
+      if (p === 0) { if (q < 0) return null; continue; }
+      const t = q / p;
+      if (p < 0) { if (t > t1) return null; if (t > t0) t0 = t; } else { if (t < t0) return null; if (t < t1) t1 = t; }
+    }
+    return [[a[0] + t0 * dx, a[1] + t0 * dy], [a[0] + t1 * dx, a[1] + t1 * dy]];
+  }
+  function netMarkup(vb) {  // the network in view, simplified to about a pixel of a thumbnail and clipped to the
+    // map (with a margin): WebKit skips paths whose extent is far larger than what's drawn
+    const tol = vb[2] / 250, m = vb[2] * 0.05, k = MAPW / vb[2];
+    const r = [vb[0] - m, vb[1] - m, vb[0] + vb[2] + m, vb[1] + vb[3] + m];
+    const f = p => ((p[0] - vb[0]) * k).toFixed(1) + " " + ((p[1] - vb[1]) * k).toFixed(1);
+    let d = "";
+    for (const s of NET) {
+      if (s.x1 < r[0] || s.x0 > r[2] || s.y1 < r[1] || s.y0 > r[3]) continue;
+      const q = lod(s, tol);
+      let open = false;
+      for (let i = 1; i < q.length; i++) {
+        const c = clipLine(q[i - 1], q[i], r);
+        if (!c) { open = false; continue; }
+        d += (open ? "" : "M" + f(c[0])) + "L" + f(c[1]);
+        open = c[1][0] === q[i][0] && c[1][1] === q[i][1];  // the next piece continues this one if not cut here
+      }
+    }
+    return d ? `<path d="${d}" fill="none" stroke="var(--net)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>` : "";
+  }
+  const fillNet = (g, on) => { if (g) g.innerHTML = on ? netMarkup(g.dataset.vb.split(",").map(Number)) : ""; };
+  // Maps carry the network only while on or near the screen: WebKit stops drawing network paths that are too
+  // large in total.
+  const netObs = new IntersectionObserver(entries => {
+    for (const e of entries) fillNet(e.target.querySelector("g.net"), e.isIntersecting);
+  }, { rootMargin: "400px 0px" });
+  // Maps are drawn in local units, MAPW wide, from their own corner: degree coordinates far from the origin at
+  // high zoom lose precision in WebKit, which then drops or flickers what it draws.
+  const MAPW = 400;
   function mapSVG(c, cls) {
     const pts = c.pts;
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
@@ -281,19 +342,18 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     const asp = 4 / 3;
     if (bw / bh < asp) bw = bh * asp; else bh = bw / asp;
     const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, vb = [cx - bw / 2, cy - bh / 2, bw, bh];
-    const d = "M" + pts.map(p => p[0].toFixed(5) + " " + p[1].toFixed(5)).join("L");
-    const r = bw * 0.018;
-    const end = c.endll ? P(c.endll) : null;
-    // Only the network segments in view, drawn in this map (WebKit drops a large shared <use> network).
-    const netD = NET.filter(s => s.x1 >= vb[0] && s.x0 <= vb[0] + vb[2] && s.y1 >= vb[1] && s.y0 <= vb[1] + vb[3])
-      .map(s => "M" + s.q.map(p => p[0].toFixed(5) + " " + p[1].toFixed(5)).join("L")).join("");
-    return `<svg class="${cls}" viewBox="${vb.map(v => v.toFixed(5)).join(" ")}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(NAME[c.t])} route map, ${c.dist} miles">
-      <rect x="${vb[0]}" y="${vb[1]}" width="${vb[2]}" height="${vb[3]}" fill="var(--surface)"/>
-      ${netD ? `<path d="${netD}" fill="none" stroke="var(--net)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>` : ""}
+    const k = MAPW / bw, H = (bh * k).toFixed(1);
+    const loc = p => [(p[0] - vb[0]) * k, (p[1] - vb[1]) * k];
+    const d = "M" + pts.map(p => loc(p).map(v => v.toFixed(1)).join(" ")).join("L");
+    const r = MAPW * 0.018;
+    const s0 = loc(pts[0]), end = c.endll ? loc(P(c.endll)) : null;
+    return `<svg class="${cls}" viewBox="0 0 ${MAPW} ${H}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="${esc(NAME[c.t])} route map, ${c.dist} miles">
+      <rect x="0" y="0" width="${MAPW}" height="${H}" fill="var(--surface)"/>
+      <g class="net" data-vb="${vb.join(",")}"></g>
       <path d="${d}" fill="none" stroke="var(--surface)" stroke-width="5" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
       <path d="${d}" fill="none" stroke="${color(c.t)}" stroke-width="2.25" vector-effect="non-scaling-stroke" stroke-linejoin="round" stroke-linecap="round"/>
-      <circle cx="${pts[0][0]}" cy="${pts[0][1]}" r="${r}" fill="var(--surface)" stroke="var(--mark)" stroke-width="2" vector-effect="non-scaling-stroke"/>
-      ${end ? `<rect x="${end[0] - r}" y="${end[1] - r}" width="${2 * r}" height="${2 * r}" fill="var(--mark)" stroke="var(--surface)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
+      <circle cx="${s0[0].toFixed(1)}" cy="${s0[1].toFixed(1)}" r="${r}" fill="var(--surface)" stroke="var(--mark)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      ${end ? `<rect x="${(end[0] - r).toFixed(1)}" y="${(end[1] - r).toFixed(1)}" width="${2 * r}" height="${2 * r}" fill="var(--mark)" stroke="var(--surface)" stroke-width="1.5" vector-effect="non-scaling-stroke"/>` : ""}
     </svg>`;
   }
   const detailText = c => c.t !== "loop" ? c.details
@@ -348,6 +408,7 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
 
   function renderGrid() {
     const rows = document.getElementById("rows");
+    netObs.disconnect();
     rows.innerHTML = "";
     for (const { mi, label, race } of DATA.budgets) {
       const tr = document.createElement("tr");
@@ -376,6 +437,7 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
       }
       rows.appendChild(tr);
     }
+    rows.querySelectorAll("svg.map").forEach(s => netObs.observe(s));
   }
 
   function renderChart() {
@@ -436,6 +498,7 @@ dialog::backdrop { background: rgb(10 14 12 / .55); }
     document.getElementById("dlg-title").textContent = `${NAME[c.t]}, ${budget}`;
     document.getElementById("dlg-sub").textContent = `${site.title}. ${detailText(c)}`;
     document.getElementById("dlg-map").innerHTML = mapSVG(c, "map");
+    fillNet(document.querySelector("#dlg-map g.net"), true);
     document.getElementById("dlg-profile").innerHTML = profileSVG(c);
     document.getElementById("dlg-kv").innerHTML = [
       ["Gain", `${fmt(c.gain)} ft`], ["Distance", `${c.dist.toFixed(2)} mi`], ["Rate", `${fmt(Math.round(c.gain / c.dist))} ft/mi`],

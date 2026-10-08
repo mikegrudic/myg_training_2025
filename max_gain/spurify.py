@@ -28,9 +28,9 @@ def along(pts):
     return np.r_[0, np.cumsum(np.hypot(np.diff(pts[:, 1]) * 111320 * np.cos(lat0), np.diff(pts[:, 0]) * 110540))]
 
 
-def match(edges, pts, tol):
-    """Times the track runs each edge: the junctions it passes within ``tol`` (m), in order, joined by the shortest
-    trail between them, so the result is always one continuous walk."""
+def match(edges, pts, tol, start, end):
+    """Times the track runs each edge: the junctions it passes within ``tol`` (m), in order, from ``start`` to
+    ``end``, joined by the shortest trail between them, so the result is always one continuous walk."""
     lat0 = np.radians(pts[:, 0].mean())
     G = nx.MultiGraph()
     xy = {}
@@ -43,12 +43,14 @@ def match(edges, pts, tol):
     d = along(pts)
     s = np.arange(0, d[-1], 5.0)
     trk = np.c_[np.interp(s, d, pts[:, 1]) * 111320 * np.cos(lat0), np.interp(s, d, pts[:, 0]) * 110540]
-    seq = []
+    seq = [start]
     for p in trk:
         dd = np.hypot(*(nxy - p).T)
         i = int(dd.argmin())
         if dd[i] <= tol and (not seq or seq[-1] != nodes[i]):
             seq.append(nodes[i])
+    if seq[-1] != end:
+        seq.append(end)
     counts = np.zeros(len(edges), int)
     for a, b in zip(seq, seq[1:]):
         path = nx.shortest_path(G, a, b, weight="w")
@@ -99,7 +101,7 @@ def main():
     mg.add_elevation(edges, 50.0, "3dep")
     edges = mg.subdivide(edges, None)  # per-edge climb, no splitting
 
-    base = match(edges, pts, args.match_m)
+    base = match(edges, pts, args.match_m, start, end)
     L_base = sum(e["length"] * c for e, c in zip(edges, base))
     if abs(L_base - L0) > 0.05 * L0:
         print(f"Warning: the route matched {L_base / mg.MI_TO_M:.2f} mi of trail for a {L0 / mg.MI_TO_M:.2f} mi track; "

@@ -29,6 +29,7 @@ TRAILHEADS = {
     "central-park": ("Central Park, base of Harlem Hill", "New York, NY", (40.79934, -73.95550)),
     "central-park-south": ("Central Park, 7th Avenue entrance", "New York, NY", (40.76703, -73.97900)),
     "prospect-park": ("Prospect Park, Grand Army Plaza", "Brooklyn, NY", (40.67180, -73.97060)),
+    "harlem-acp": ("2276 Adam Clayton Powell Jr. Blvd", "New York, NY", (40.8143, -73.9443)),
     "inwood-215": ("215 St station (1), Inwood Hill and Fort Tryon parks", "New York, NY", (40.86957, -73.91519)),
     "fort-tryon-190": ("190 St station (A), Fort Tryon and Inwood Hill parks", "New York, NY", (40.85890, -73.93399)),
     "dyckman-a": ("Dyckman St station (A), between Fort Tryon and Inwood Hill parks", "New York, NY", (40.86528, -73.92780)),
@@ -84,7 +85,7 @@ ROAD_RUN_EXTRA_WAYS = {
 }
 
 
-def sidewalk_links(edges, max_m):
+def sidewalk_links(edges, max_m, any_way=False):
     """Straight connectors from dead ends of the extra road-run ways to the nearest road junction within ``max_m``,
     standing in for the sidewalks (dropped from the graph) that join them to the street."""
     pos, deg = {}, collections.Counter()
@@ -96,7 +97,7 @@ def sidewalk_links(edges, max_m):
     xy = np.array([pos[n] for n in road])
     links = []
     for e in edges:
-        if e.get("way") not in ROAD_RUN_EXTRA_WAYS:
+        if e["road"] or (not any_way and e.get("way") not in ROAD_RUN_EXTRA_WAYS):
             continue
         for n in (e["u"], e["v"]):
             if deg[n] == 1:
@@ -145,6 +146,11 @@ SITE_AREAS = {
     "central-park": dict(center=(40.7829, -73.9654), radius_mi=2.6, margin_m=40.0, periphery_m=30.0, exclude_names=("Transverse",),
                          corners=[(40.7644, -73.9730), (40.7681, -73.9819), (40.8003, -73.9580), (40.7968, -73.9496)]),
     "central-park-south": None,  # set below: the same area as central-park
+    # Streets, park paths and stairs within 1.8 mi of the start (into Central Park's North Woods); mapped sidewalks
+    # and crosswalks are left out (the streets stand in for them) and path dead ends linked to the nearest street.
+    "harlem-acp": dict(center=(40.8143, -73.9443), radius_mi=1.9, margin_m=0.0, periphery_m=0.0, no_sidewalks=True,
+                       exclude_names=("Harlem River Drive", "Henry Hudson Parkway", "Major Deegan Expressway"),
+                       polys=[[(40.8143, -73.90992), (40.82108, -73.91109), (40.8274, -73.91452), (40.83283, -73.91999), (40.837, -73.92711), (40.83961, -73.9354), (40.84051, -73.9443), (40.83961, -73.9532), (40.837, -73.96149), (40.83283, -73.96861), (40.8274, -73.97408), (40.82108, -73.97751), (40.8143, -73.97868), (40.80752, -73.97751), (40.8012, -73.97408), (40.79577, -73.96861), (40.7916, -73.96149), (40.78899, -73.9532), (40.78809, -73.9443), (40.78899, -73.9354), (40.7916, -73.92711), (40.79577, -73.91999), (40.8012, -73.91452), (40.80752, -73.91109)]]),
     # Fort Tryon and Inwood Hill parks (OSM outlines, simplified) with Isham Park, the streets between them (within
     # the margin) and the station approaches; the rest of the street grid is left out.
     "uptown-parks": dict(center=(40.8665, -73.9265), radius_mi=1.2, margin_m=40.0, periphery_m=30.0,
@@ -302,6 +308,8 @@ def area_graph(slug, p2p):
             continue
         if not any(n in nodes and in_area(*nodes[n], area) for n in e["nodes"]):
             continue
+        if area.get("no_sidewalks") and t.get("footway") in ("sidewalk", "crossing", "traffic_island"):
+            continue
         if t.get("access") == "private" or t.get("motor_vehicle") == "private":  # car-free drives: open on foot
             t["foot"] = "yes"
         keep.append(dict(e, tags=t))
@@ -319,6 +327,8 @@ def area_graph(slug, p2p):
                 heads[n] = (*nodes[n], TRAILHEADS[other][0].split(",")[0])
         raw, ids = mg.build_graph(sub, True, None, [th], extra_ids=heads, closed=CLOSED)
     raw = [e for e in raw if in_area(*e["latlon"][len(e["latlon"]) // 2], area)]
+    if area.get("no_sidewalks"):
+        raw += sidewalk_links(raw, 40.0, any_way=True)
     for e in raw:
         e["walk"], e["free"] = True, True
     return raw, ids, heads

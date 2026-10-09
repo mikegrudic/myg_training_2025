@@ -5,7 +5,7 @@ import glob, os, re, shutil, subprocess, sys
 OUT = os.path.abspath(sys.argv[1])
 HERE = os.path.dirname(os.path.abspath(__file__))
 EDITIONS = [("roads", "Road walks allowed", dict(SITES_DIR="sites_merged")),
-            ("trails", "Trails only", dict(SITES_DIR="sites_trails", EDITION="trails"))]
+            ("trails", "Trails only", dict(SITES_DIR="sites_trails_merged", EDITION="trails"))]
 TITLE = "Combinatorial vertmaxxing"
 ABSTRACT = ("Do it for the vert. These are routes generated to have the highest known vertical gain for a given "
             "distance from a chosen starting point, with various choices for the topology of the route. Some of these "

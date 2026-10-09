@@ -1,5 +1,6 @@
 """Per cell, the best route valid under the current road-walk rules, from the given run folders (first = preferred
-on ties). Routes over the closed 9D stretch at Breakneck or an abandoned way are dropped."""
+on ties). Routes over a closed segment (every closures file vertmaxxer ships: the 9D stretch at Breakneck, abandoned
+ways, private property, ...) are dropped."""
 import glob, json, os, re, shutil, sys
 import numpy as np
 from vertmaxxer.core import CLOSURES_DIR as CLOSURES
@@ -10,9 +11,19 @@ out, *srcs = [a for a in sys.argv[1:] if not a.startswith("--")]
 pairs = json.load(open(os.path.join(CLOSURES, "breakneck_9d_2026-10.json")))["closed_segments"]
 osm_nodes = json.load(open(os.path.join(os.path.dirname(__file__), "breakneck_9d_nodes.json")))
 mids = np.array([[(osm_nodes[str(a)][0] + osm_nodes[str(b)][0]) / 2, (osm_nodes[str(a)][1] + osm_nodes[str(b)][1]) / 2] for a, b in pairs])
-# Abandoned ways (an OSM end_date in the past), anywhere.
-ab_pairs = json.load(open(os.path.join(CLOSURES, "abandoned_ways_2026-10.json")))["closed_segments"]
-ab_nodes = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "abandoned_nodes.json")))
+# Every other closure (abandoned ways, private property, ...), anywhere: the midpoints of their segments, with node
+# coordinates kept in closure_nodes.json and looked up in OpenStreetMap when a closures file adds nodes.
+HERE = os.path.dirname(os.path.abspath(__file__))
+ab_pairs = [p for f in sorted(glob.glob(os.path.join(CLOSURES, "*.json"))) if "breakneck_9d" not in f
+            for p in json.load(open(f))["closed_segments"]]
+NODES_FILE = os.path.join(HERE, "closure_nodes.json")
+ab_nodes = json.load(open(NODES_FILE)) if os.path.exists(NODES_FILE) else json.load(open(os.path.join(HERE, "abandoned_nodes.json")))
+missing = sorted({n for p in ab_pairs for n in p} - {int(k) for k in ab_nodes})
+if missing:
+    from vertmaxxer.core import _overpass
+    got = _overpass(f"[out:json][timeout:120];node(id:{','.join(map(str, missing))});out;", "closure_nodes")
+    ab_nodes.update({str(e["id"]): [e["lat"], e["lon"]] for e in got["elements"]})
+    json.dump(ab_nodes, open(NODES_FILE, "w"))
 ab_mids = np.array([[(ab_nodes[str(a)][0] + ab_nodes[str(b)][0]) / 2, (ab_nodes[str(a)][1] + ab_nodes[str(b)][1]) / 2] for a, b in ab_pairs])
 
 SCHOOL = np.array([[41.4192, -73.9423], [41.41929, -73.94202]])  # Manitou School's drive off 9D (road runs)
